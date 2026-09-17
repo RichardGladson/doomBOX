@@ -19,7 +19,7 @@
 #include <Arduino.h>
 #include <RF24.h>
 
-extern RF24 radios[3];
+extern RF24 radios[1];
 
 static bool classicBtMemReleased = false;
 

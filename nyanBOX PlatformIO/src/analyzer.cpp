@@ -69,11 +69,6 @@ uint8_t currentFilter = FILTER_ALL;
 
 #define CE1  RADIO_CE_PIN_1
 #define CSN1 RADIO_CSN_PIN_1
-#define CE2  RADIO_CE_PIN_2
-#define CSN2 RADIO_CSN_PIN_2
-#define CE3  RADIO_CE_PIN_3
-#define CSN3 RADIO_CSN_PIN_3
-
 
 void writeRegister(uint8_t csn, uint8_t reg, uint8_t value) {
     digitalWrite(csn, LOW);
@@ -129,10 +124,6 @@ void analyzerSetup(){
 
     pinMode(CE1, OUTPUT);
     pinMode(CSN1, OUTPUT);
-    pinMode(CE2, OUTPUT);
-    pinMode(CSN2, OUTPUT);
-    pinMode(CE3, OUTPUT);
-    pinMode(CSN3, OUTPUT);
 
     SPI.begin(18, 19, 23, 17);
     delay(100);
@@ -142,22 +133,10 @@ void analyzerSetup(){
 
     digitalWrite(CSN1, HIGH);
     digitalWrite(CE1, LOW);
-    digitalWrite(CSN2, HIGH);
-    digitalWrite(CE2, LOW);
-    digitalWrite(CSN3, HIGH);
-    digitalWrite(CE3, LOW);
 
     powerUP(CSN1);
     writeRegister(CSN1, NRF24_EN_AA, 0x00);
     writeRegister(CSN1, NRF24_RF_SETUP, 0x0F);
-
-    powerUP(CSN2);
-    writeRegister(CSN2, NRF24_EN_AA, 0x00);
-    writeRegister(CSN2, NRF24_RF_SETUP, 0x0F);
-
-    powerUP(CSN3);
-    writeRegister(CSN3, NRF24_EN_AA, 0x00);
-    writeRegister(CSN3, NRF24_RF_SETUP, 0x0F);
 
 }
 
@@ -194,7 +173,7 @@ void analyzerLoop(){
     memset(spectrum, 0, sizeof(spectrum));
 
     const int sweeps = 30;
-    const int channelStep = 3;
+    const int channelStep = 1;
     const FilterRange &filter = filterRanges[currentFilter];
 
     for (int sweep = 0; sweep < sweeps; sweep++) {
@@ -202,22 +181,14 @@ void analyzerLoop(){
             if (ch > filter.end) break;
 
             setChannel(CSN1, ch);
-            if (ch + 1 <= filter.end) setChannel(CSN2, ch + 1);
-            if (ch + 2 <= filter.end) setChannel(CSN3, ch + 2);
 
             startListening(CE1, CSN1);
-            if (ch + 1 <= filter.end) startListening(CE2, CSN2);
-            if (ch + 2 <= filter.end) startListening(CE3, CSN3);
 
             delayMicroseconds(100);
 
             if (carrierDetected(CSN1)) spectrum[ch]++;
-            if (ch + 1 <= filter.end && carrierDetected(CSN2)) spectrum[ch + 1]++;
-            if (ch + 2 <= filter.end && carrierDetected(CSN3)) spectrum[ch + 2]++;
 
             stopListening(CE1);
-            if (ch + 1 <= filter.end) stopListening(CE2);
-            if (ch + 2 <= filter.end) stopListening(CE3);
         }
 
         if (sweep % 5 == 0) {

@@ -71,9 +71,7 @@
 #include "../include/radio_manager.h"
 
 RF24 radios[] = {
-  RF24(RADIO_CE_PIN_1, RADIO_CSN_PIN_1),
-  RF24(RADIO_CE_PIN_2, RADIO_CSN_PIN_2),
-  RF24(RADIO_CE_PIN_3, RADIO_CSN_PIN_3)
+  RF24(RADIO_CE_PIN_1, RADIO_CSN_PIN_1)
 };
 
 U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, U8X8_PIN_NONE);
@@ -514,27 +512,20 @@ void setup() {
   neopixelSetup();
   SPI.begin();
 
-  int cePins[] = {RADIO_CE_PIN_1, RADIO_CE_PIN_2, RADIO_CE_PIN_3};
-  int csnPins[] = {RADIO_CSN_PIN_1, RADIO_CSN_PIN_2, RADIO_CSN_PIN_3};
-
-  for (int i = 0; i < 3; i++) {
-    pinMode(cePins[i], OUTPUT);
-    pinMode(csnPins[i], OUTPUT);
-    digitalWrite(csnPins[i], HIGH);
-    digitalWrite(cePins[i], LOW);
-  }
+  // Single NRF24 module
+  pinMode(RADIO_CE_PIN_1, OUTPUT);
+  pinMode(RADIO_CSN_PIN_1, OUTPUT);
+  digitalWrite(RADIO_CSN_PIN_1, HIGH);
+  digitalWrite(RADIO_CE_PIN_1, LOW);
   delay(100);
 
-  for (int i = 0; i < 3; i++) {
-    if (!radios[i].begin() || !radios[i].isChipConnected()) {
-      continue;
-    }
-    radios[i].setAutoAck(false);
-    radios[i].stopListening();
-    radios[i].setRetries(0,0);
-    radios[i].setPALevel(RF24_PA_MAX, true);
-    radios[i].setDataRate(RF24_2MBPS);
-    radios[i].setCRCLength(RF24_CRC_DISABLED);
+  if (radios[0].begin() && radios[0].isChipConnected()) {
+    radios[0].setAutoAck(false);
+    radios[0].stopListening();
+    radios[0].setRetries(0,0);
+    radios[0].setPALevel(RF24_PA_MAX, true);
+    radios[0].setDataRate(RF24_2MBPS);
+    radios[0].setCRCLength(RF24_CRC_DISABLED);
   }
 
   EEPROM.begin(512);
