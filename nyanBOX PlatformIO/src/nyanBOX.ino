@@ -45,6 +45,7 @@
 #include "../include/smarttag_detector.h"
 #include "../include/rayban_detector.h"
 #include "../include/wifiscan.h"
+#include "../include/client_sniffer.h"
 #include "../include/deauth.h"
 #include "../include/deauth_scanner.h"
 #include "../include/beacon_spam.h"
@@ -364,6 +365,7 @@ constexpr int MAIN_MENU_SIZE = sizeof(mainMenu) / sizeof(mainMenu[0]);
 
 MenuItem wifiMenu[] = {
   { "WiFi Scan",       nullptr, wifiscanSetup,           wifiscanLoop,           wifiscanCleanup },
+  { "Client Sniffer",  nullptr, clientSnifferSetup,      clientSnifferLoop,      clientSnifferCleanup },
   { "Channel Analyzer", nullptr, channelAnalyzerSetup,   channelAnalyzerLoop,    cleanupWiFi },
   { "WiFi Deauther",   nullptr, deauthSetup,             deauthLoop,             cleanupWiFi },
   { "Deauth Scanner",  nullptr, deauthScannerSetup,      deauthScannerLoop,      cleanupWiFi },
