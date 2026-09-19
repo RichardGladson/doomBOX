@@ -557,38 +557,46 @@ void setup() {
 
   updateLastActivity();
 
+  // ========== Opening Scene 1: RG / doomBOX logo bitmap ==========
   u8g2.clearBuffer();
-  
-  u8g2.setFont(u8g2_font_helvB14_tr);
-  const char* title = "nyanBOX";
-  int16_t titleW = u8g2.getUTF8Width(title);
-  u8g2.setCursor((128 - titleW) / 2, 16);
-  u8g2.print(title);
-
-  u8g2.setFont(u8g2_font_helvR08_tr);
-  const char* url = "nyandevices.com";
-  int16_t urlW = u8g2.getUTF8Width(url);
-  u8g2.setCursor((128 - urlW) / 2, 32);
-  u8g2.print(url);
-
-  u8g2.setFont(u8g2_font_helvR08_tr);
-  int16_t creditWidth = u8g2.getUTF8Width("by jbohack & zr_crackiin");
-  int16_t creditX = (128 - creditWidth) / 2;
-  u8g2.setCursor(creditX, 50);
-  u8g2.print("by jbohack & zr_crackiin");
-
-  u8g2.setFont(u8g2_font_helvR08_tr);
-  int16_t verW = u8g2.getUTF8Width(nyanboxVersion);
-  u8g2.setCursor((128 - verW) / 2, 62);
-  u8g2.print(nyanboxVersion);
-
+  u8g2.drawBitmap(0, 0, 16, 64, logo_doombox);  // 128px wide = 16 bytes
   u8g2.sendBuffer();
   delay(2000);
 
+  // ========== Opening Scene 2: doomBOX text splash ==========
   u8g2.clearBuffer();
-  u8g2.drawXBMP(0, 0, 128, 64, logo_nyanbox);
+
+  u8g2.setFont(u8g2_font_helvB14_tr);
+  const char* title = "doomBOX";
+  int16_t titleW = u8g2.getUTF8Width(title);
+  u8g2.setCursor((128 - titleW) / 2, 14);
+  u8g2.print(title);
+
+  u8g2.setFont(u8g2_font_5x8_tr);
+  const char* url = "github.com/richardgladson/doomBOX";
+  int16_t urlW = u8g2.getUTF8Width(url);
+  u8g2.setCursor((128 - urlW) / 2, 28);
+  u8g2.print(url);
+
+  u8g2.setFont(u8g2_font_helvR08_tr);
+  const char* credit1 = "made by Richard Gladson";
+  int16_t c1W = u8g2.getUTF8Width(credit1);
+  u8g2.setCursor((128 - c1W) / 2, 42);
+  u8g2.print(credit1);
+
+  const char* credit2 = "inspired by nyanBOX";
+  int16_t c2W = u8g2.getUTF8Width(credit2);
+  u8g2.setCursor((128 - c2W) / 2, 52);
+  u8g2.print(credit2);
+
+  u8g2.setFont(u8g2_font_5x8_tr);
+  const char* tagline = "wireless pentesting device";
+  int16_t tagW = u8g2.getUTF8Width(tagline);
+  u8g2.setCursor((128 - tagW) / 2, 62);
+  u8g2.print(tagline);
+
   u8g2.sendBuffer();
-  delay(1500);
+  delay(2500);
 
   pinMode(BUTTON_PIN_UP, INPUT_PULLUP);
   pinMode(BUTTON_PIN_CENTER, INPUT_PULLUP);

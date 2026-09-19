@@ -1248,8 +1248,11 @@ void wifiscanLoop() {
       char line[32];
       char maskedSSID[33];
       maskName(n.ssid[0] ? n.ssid : "Unknown", maskedSSID, sizeof(maskedSSID) - 1);
-      snprintf(line, sizeof(line), "%.8s | RSSI %d",
-               maskedSSID, n.rssi);
+      // Fixed columns: SSID (left) | RSSI | Channel
+      char shortSSID[13];
+      strncpy(shortSSID, maskedSSID, 12);
+      shortSSID[12] = '\0';
+      snprintf(line, sizeof(line), "%-12s%4d %2d", shortSSID, n.rssi, n.channel);
       u8g2.drawStr(10, 20 + i * 10, line);
     }
   }

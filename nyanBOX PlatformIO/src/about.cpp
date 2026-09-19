@@ -82,28 +82,35 @@ void aboutLoop() {
 
   needsRedraw = false;
   u8g2.clearBuffer();
+
   u8g2.setFont(u8g2_font_helvB14_tr);
-  const char* title = "nyanBOX";
+  const char* title = "doomBOX";
   int16_t titleW = u8g2.getUTF8Width(title);
-  u8g2.setCursor((128 - titleW) / 2, 16);
+  u8g2.setCursor((128 - titleW) / 2, 14);
   u8g2.print(title);
 
-  u8g2.setFont(u8g2_font_helvR08_tr);
-  const char* url = "nyandevices.com";
+  u8g2.setFont(u8g2_font_5x8_tr);
+  const char* url = "github.com/richardgladson/doomBOX";
   int16_t urlW = u8g2.getUTF8Width(url);
-  u8g2.setCursor((128 - urlW) / 2, 32);
+  u8g2.setCursor((128 - urlW) / 2, 28);
   u8g2.print(url);
 
   u8g2.setFont(u8g2_font_helvR08_tr);
-  int16_t creditWidth = u8g2.getUTF8Width("jbohack & zr_crackiin");
-  int16_t creditX = (128 - creditWidth) / 2;
-  u8g2.setCursor(creditX, 50);
-  u8g2.print("jbohack & zr_crackiin");
+  const char* credit1 = "made by Richard Gladson";
+  int16_t c1W = u8g2.getUTF8Width(credit1);
+  u8g2.setCursor((128 - c1W) / 2, 42);
+  u8g2.print(credit1);
 
-  u8g2.setFont(u8g2_font_helvR08_tr);
-  int16_t verW = u8g2.getUTF8Width(nyanboxVersion);
-  u8g2.setCursor((128 - verW) / 2, 62);
-  u8g2.print(nyanboxVersion);
+  const char* credit2 = "inspired by nyanBOX";
+  int16_t c2W = u8g2.getUTF8Width(credit2);
+  u8g2.setCursor((128 - c2W) / 2, 52);
+  u8g2.print(credit2);
+
+  u8g2.setFont(u8g2_font_5x8_tr);
+  const char* tagline = "wireless pentesting device";
+  int16_t tagW = u8g2.getUTF8Width(tagline);
+  u8g2.setCursor((128 - tagW) / 2, 62);
+  u8g2.print(tagline);
 
   u8g2.sendBuffer();
   displayMirrorSend(u8g2);
