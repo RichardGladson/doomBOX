@@ -22,12 +22,13 @@ extern U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2;
 
 RF24 radio_1(RADIO_CE_PIN_1, RADIO_CSN_PIN_1, 16000000);
 
-enum SigKillMode { SIG_MENU, SIG_JAMMING };
+enum SigKillMode { SIG_MENU, SIG_WIFI_SELECT, SIG_JAMMING };
 enum ProtocolType { ALL, WIFI, BLUETOOTH, BLE, VIDEO_TX, RC, USB_WIRELESS, ZIGBEE, NRF24 };
 
 static SigKillMode currentMode = SIG_MENU;
 static ProtocolType selectedProtocol = ALL;
 static int menuSelection = 0;
+static int wifiChannelSelection = 0;  // 0 = All channels, 1-11 = specific channel
 static unsigned long lastButtonPress = 0;
 const unsigned long debounceDelay = 200;
 
@@ -35,6 +36,8 @@ static bool needsRedraw = true;
 static int lastMenuSelection = -1;
 static SigKillMode lastMode = SIG_MENU;
 static ProtocolType lastProtocol = ALL;
+static int lastWifiChannelSelection = -1;
+static bool radioReady = false;
 
 // Protocol channel definitions
 const byte bluetooth_channels[]        = {32,34,46,48,50,52,0,1,2,4,6,8,22,24,26,28,30,74,76,78,80};
@@ -58,20 +61,22 @@ void configureRadio(RF24 &radio, byte initialChannel) {
   radio.setPALevel(RF24_PA_MAX, true);
   radio.setDataRate(RF24_2MBPS);
   radio.setCRCLength(RF24_CRC_DISABLED);
-  radio.printPrettyDetails();
-  
   radio.startConstCarrier(RF24_PA_MAX, initialChannel);
 }
 
 void initializeRadios() {
   SPI.begin();
   delay(100);
-  
-  if (radio_1.begin()) configureRadio(radio_1, 2);
+  radioReady = false;
+  if (radio_1.begin()) {
+    configureRadio(radio_1, 2);
+    radioReady = true;
+  }
 }
 
 void powerDownRadios() {
   radio_1.powerDown();
+  radioReady = false;
   delay(100);
 }
 
@@ -105,7 +110,38 @@ static void drawSigMenu() {
   u8g2.drawBox(scrollbarX + 1, thumbY, scrollbarWidth - 2, thumbHeight);
 
   u8g2.setFont(u8g2_font_5x8_tr);
-  u8g2.drawStr(0, 62, "U/D=Move R=Start SEL=Exit");
+  u8g2.drawStr(0, 62, "U/D=Move R=Select SEL=Exit");
+  u8g2.sendBuffer();
+  displayMirrorSend(u8g2);
+}
+
+// WiFi channel selection submenu: 0=All, 1-11=fixed channel
+static void drawWifiSelect() {
+  u8g2.clearBuffer();
+  u8g2.setFont(u8g2_font_6x10_tr);
+  u8g2.drawStr(0, 10, "WiFi Channel:");
+
+  u8g2.setFont(u8g2_font_5x8_tr);
+  const int visible = 4;
+  // 12 options: All + Ch1..Ch11
+  const int totalOptions = 12;
+  int start = (wifiChannelSelection / visible) * visible;
+
+  for (int i = 0; i < visible; i++) {
+    int idx = start + i;
+    if (idx >= totalOptions) break;
+    char line[24];
+    if (idx == 0) {
+      snprintf(line, sizeof(line), "%s All Channels",
+               (idx == wifiChannelSelection) ? ">" : " ");
+    } else {
+      snprintf(line, sizeof(line), "%s Channel %d",
+               (idx == wifiChannelSelection) ? ">" : " ", idx);
+    }
+    u8g2.drawStr(0, 22 + i * 10, line);
+  }
+
+  u8g2.drawStr(0, 62, "U/D=Move R=Jam L=Back SEL=Exit");
   u8g2.sendBuffer();
   displayMirrorSend(u8g2);
 }
@@ -113,15 +149,33 @@ static void drawSigMenu() {
 static void drawActiveJamming(const char* protocolName) {
   u8g2.clearBuffer();
   u8g2.setFont(u8g2_font_6x10_tr);
+
   char title[32];
-  snprintf(title, sizeof(title), "%s Jamming", protocolName);
+  if (selectedProtocol == WIFI && wifiChannelSelection > 0) {
+    snprintf(title, sizeof(title), "WiFi Ch%d Jam", wifiChannelSelection);
+  } else {
+    snprintf(title, sizeof(title), "%s Jamming", protocolName);
+  }
   u8g2.drawStr(0, 12, title);
-  u8g2.drawStr(0, 28, "Status: Active");
+
+  u8g2.drawStr(0, 28, "Status: JAMMING");
+
   u8g2.setFont(u8g2_font_5x8_tr);
   char radioStatus[32];
-  snprintf(radioStatus, sizeof(radioStatus), "R1:%s",
-           radio_1.isChipConnected() ? "ON" : "OFF");
+  snprintf(radioStatus, sizeof(radioStatus), "R1: %s",
+           radioReady ? "ACTIVE" : "FAIL");
   u8g2.drawStr(0, 42, radioStatus);
+
+  if (selectedProtocol == WIFI) {
+    if (wifiChannelSelection == 0) {
+      u8g2.drawStr(0, 52, "Mode: All channels");
+    } else {
+      char chLine[24];
+      snprintf(chLine, sizeof(chLine), "Mode: Fixed Ch %d", wifiChannelSelection);
+      u8g2.drawStr(0, 52, chLine);
+    }
+  }
+
   u8g2.drawStr(0, 62, "L=Back SEL=Exit");
   u8g2.sendBuffer();
   displayMirrorSend(u8g2);
@@ -140,11 +194,14 @@ void sigkillSetup() {
   currentMode = SIG_MENU;
   menuSelection = 0;
   selectedProtocol = ALL;
+  wifiChannelSelection = 0;
+  radioReady = false;
 
   needsRedraw = true;
   lastMenuSelection = -1;
   lastMode = SIG_MENU;
   lastProtocol = ALL;
+  lastWifiChannelSelection = -1;
 
   powerDownRadios();
   drawSigMenu();
@@ -170,6 +227,10 @@ void sigkillLoop() {
     lastProtocol = selectedProtocol;
     needsRedraw = true;
   }
+  if (lastWifiChannelSelection != wifiChannelSelection) {
+    lastWifiChannelSelection = wifiChannelSelection;
+    needsRedraw = true;
+  }
 
   switch (currentMode) {
     case SIG_MENU:
@@ -184,9 +245,15 @@ void sigkillLoop() {
           lastButtonPress = now;
         } else if (right) {
           selectedProtocol = (ProtocolType)menuSelection;
-          currentMode = SIG_JAMMING;
+          if (selectedProtocol == WIFI) {
+            // Go to WiFi channel selection submenu
+            wifiChannelSelection = 0;
+            currentMode = SIG_WIFI_SELECT;
+          } else {
+            currentMode = SIG_JAMMING;
+            initializeRadios();
+          }
           needsRedraw = true;
-          initializeRadios();
           lastButtonPress = now;
         }
       }
@@ -194,6 +261,39 @@ void sigkillLoop() {
       if (needsRedraw) {
         needsRedraw = false;
         drawSigMenu();
+      }
+      break;
+
+    case SIG_WIFI_SELECT:
+      if (now - lastButtonPress > debounceDelay) {
+        if (up) {
+          wifiChannelSelection = (wifiChannelSelection - 1 + 12) % 12;
+          needsRedraw = true;
+          lastButtonPress = now;
+        } else if (down) {
+          wifiChannelSelection = (wifiChannelSelection + 1) % 12;
+          needsRedraw = true;
+          lastButtonPress = now;
+        } else if (right) {
+          // Start jamming with selected WiFi mode
+          currentMode = SIG_JAMMING;
+          initializeRadios();
+          // If fixed channel, set it immediately
+          if (radioReady && wifiChannelSelection > 0) {
+            radio_1.setChannel(wifiChannelSelection);
+          }
+          needsRedraw = true;
+          lastButtonPress = now;
+        } else if (left) {
+          currentMode = SIG_MENU;
+          needsRedraw = true;
+          lastButtonPress = now;
+        }
+      }
+
+      if (needsRedraw) {
+        needsRedraw = false;
+        drawWifiSelect();
       }
       break;
 
@@ -228,66 +328,74 @@ void sigkillLoop() {
 
               randomIndex = random(0, arraySize / sizeof(byte));
               channel = channelArray[randomIndex];
-              
-              radio_1.setChannel(channel);
-
+              if (radioReady) radio_1.setChannel(channel);
               protocolIndex++;
             }
             break;
 
           case WIFI:
-            randomIndex = random(0, sizeof(wifi_channels) / sizeof(wifi_channels[0]));
-            channel = wifi_channels[randomIndex];
-            radio_1.setChannel(channel);
+            if (wifiChannelSelection == 0) {
+              // Hop all WiFi channels
+              randomIndex = random(0, sizeof(wifi_channels) / sizeof(wifi_channels[0]));
+              channel = wifi_channels[randomIndex];
+              if (radioReady) radio_1.setChannel(channel);
+            } else {
+              // Fixed channel 1-11
+              if (radioReady) radio_1.setChannel(wifiChannelSelection);
+            }
             break;
 
           case BLUETOOTH:
             randomIndex = random(0, sizeof(bluetooth_channels) / sizeof(bluetooth_channels[0]));
             channel = bluetooth_channels[randomIndex];
-            radio_1.setChannel(channel);
+            if (radioReady) radio_1.setChannel(channel);
             break;
 
           case BLE:
             randomIndex = random(0, sizeof(ble_channels) / sizeof(ble_channels[0]));
             channel = ble_channels[randomIndex];
-            radio_1.setChannel(channel);
+            if (radioReady) radio_1.setChannel(channel);
             break;
 
           case VIDEO_TX:
             randomIndex = random(0, sizeof(videoTransmitter_channels) / sizeof(videoTransmitter_channels[0]));
             channel = videoTransmitter_channels[randomIndex];
-            radio_1.setChannel(channel);
+            if (radioReady) radio_1.setChannel(channel);
             break;
 
           case RC:
             randomIndex = random(0, sizeof(rc_channels) / sizeof(rc_channels[0]));
             channel = rc_channels[randomIndex];
-            radio_1.setChannel(channel);
+            if (radioReady) radio_1.setChannel(channel);
             break;
 
           case USB_WIRELESS:
             randomIndex = random(0, sizeof(usbWireless_channels) / sizeof(usbWireless_channels[0]));
             channel = usbWireless_channels[randomIndex];
-            radio_1.setChannel(channel);
+            if (radioReady) radio_1.setChannel(channel);
             break;
 
           case ZIGBEE:
             randomIndex = random(0, sizeof(zigbee_channels) / sizeof(zigbee_channels[0]));
             channel = zigbee_channels[randomIndex];
-            radio_1.setChannel(channel);
+            if (radioReady) radio_1.setChannel(channel);
             break;
 
           case NRF24:
             randomIndex = random(0, sizeof(nrf24_channels) / sizeof(nrf24_channels[0]));
             channel = nrf24_channels[randomIndex];
-            radio_1.setChannel(channel);
+            if (radioReady) radio_1.setChannel(channel);
             break;
         }
       }
 
       if (left && now - lastButtonPress > debounceDelay) {
         powerDownRadios();
-        currentMode = SIG_MENU;
+        if (selectedProtocol == WIFI) {
+          currentMode = SIG_WIFI_SELECT;
+        } else {
+          currentMode = SIG_MENU;
+        }
         needsRedraw = true;
         lastButtonPress = now;
       }
