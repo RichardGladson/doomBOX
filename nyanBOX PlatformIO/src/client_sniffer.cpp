@@ -181,6 +181,7 @@ static void startSniffing() {
 }
 
 // ====================== Scanning APs ======================
+// Match WiFi Scan behaviour: skip hidden, sort by RSSI descending
 static void doAPScan() {
   numNetworks = 0;
   currentState = STATE_SCANNING;
@@ -190,21 +191,37 @@ static void doAPScan() {
   WiFi.disconnect();
   delay(100);
 
-  int n = WiFi.scanNetworks(false, true); // async=false, show_hidden=true
+  // show_hidden = false to match WiFi Scan
+  int n = WiFi.scanNetworks(false /*async*/, false /*show_hidden*/);
   if (n < 0) n = 0;
-  if (n > MAX_NETWORKS) n = MAX_NETWORKS;
 
-  for (int i = 0; i < n; i++) {
+  int count = 0;
+  for (int i = 0; i < n && count < MAX_NETWORKS; i++) {
     String ssid = WiFi.SSID(i);
-    if (ssid.length() == 0) ssid = "(Hidden)";
-    strncpy(networks[i].ssid, ssid.c_str(), 32);
-    networks[i].ssid[32] = 0;
-    memcpy(networks[i].bssid, WiFi.BSSID(i), 6);
-    networks[i].channel = WiFi.channel(i);
-    networks[i].rssi = WiFi.RSSI(i);
-    networks[i].encryption = WiFi.encryptionType(i);
+    // Skip empty / hidden SSIDs (same policy as wifiscan.cpp)
+    if (ssid.length() == 0) continue;
+
+    strncpy(networks[count].ssid, ssid.c_str(), 32);
+    networks[count].ssid[32] = 0;
+    memcpy(networks[count].bssid, WiFi.BSSID(i), 6);
+    networks[count].channel = WiFi.channel(i);
+    networks[count].rssi = WiFi.RSSI(i);
+    networks[count].encryption = WiFi.encryptionType(i);
+    count++;
   }
-  numNetworks = n;
+  numNetworks = count;
+
+  // Sort by RSSI descending (strongest first) — same as WiFi Scan
+  for (int i = 0; i < numNetworks - 1; i++) {
+    for (int j = i + 1; j < numNetworks; j++) {
+      if (networks[j].rssi > networks[i].rssi) {
+        Network tmp = networks[i];
+        networks[i] = networks[j];
+        networks[j] = tmp;
+      }
+    }
+  }
+
   selectedIndex = 0;
   listStartIndex = 0;
   currentState = STATE_SELECT_AP;
@@ -237,13 +254,19 @@ static void drawAPList() {
   for (int i = 0; i < visible; i++) {
     int idx = listStartIndex + i;
     if (idx >= numNetworks) break;
-    char line[32];
+
     char mark = (idx == selectedIndex) ? '>' : ' ';
-    // Truncate SSID
-    char shortSSID[16];
-    strncpy(shortSSID, networks[idx].ssid, 14);
-    shortSSID[14] = 0;
-    snprintf(line, sizeof(line), "%c%s ch%d", mark, shortSSID, networks[idx].channel);
+    char maskedSSID[33];
+    maskName(networks[idx].ssid, maskedSSID, sizeof(maskedSSID) - 1);
+
+    char shortSSID[13];
+    strncpy(shortSSID, maskedSSID, 12);
+    shortSSID[12] = '\0';
+
+    // Fixed columns: SSID | RSSI | Channel  (matches WiFi Scan style)
+    char line[32];
+    snprintf(line, sizeof(line), "%c%-11s%4d %2d",
+             mark, shortSSID, networks[idx].rssi, networks[idx].channel);
     u8g2.drawStr(0, 22 + i * 10, line);
   }
 
@@ -257,8 +280,10 @@ static void drawClientList() {
   u8g2.setFont(u8g2_font_6x10_tr);
 
   char title[28];
+  char maskedSSID[33];
+  maskName(targetSSID, maskedSSID, sizeof(maskedSSID) - 1);
   char shortSSID[12];
-  strncpy(shortSSID, targetSSID, 10);
+  strncpy(shortSSID, maskedSSID, 10);
   shortSSID[10] = 0;
   snprintf(title, sizeof(title), "%s [%d]", shortSSID, numClients);
   u8g2.drawStr(0, 10, title);
