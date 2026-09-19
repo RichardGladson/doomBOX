@@ -10,6 +10,7 @@
 */
 
 #include "../include/radio_manager.h"
+#include "../include/pindefs.h"
 
 #include "esp_wifi.h"
 #include "esp_netif.h"
@@ -18,10 +19,59 @@
 #include "esp_gap_ble_api.h"
 #include <Arduino.h>
 #include <RF24.h>
+#include <SPI.h>
 
 extern RF24 radios[1];
 
 static bool classicBtMemReleased = false;
+
+// ---------------------------------------------------------------------------
+// Unified NRF24 SPI + chip bring-up (single module on CE=5, CSN=17)
+// ---------------------------------------------------------------------------
+void initNrf24Spi() {
+  // Explicit pin map. SS = -1 so the bus does not claim CSN (GPIO 17);
+  // RF24 / raw register code drive CSN themselves.
+  SPI.begin(18, 19, 23, -1);  // SCK, MISO, MOSI, SS
+  delay(20);
+  SPI.setDataMode(SPI_MODE0);
+  SPI.setFrequency(10000000);
+  SPI.setBitOrder(MSBFIRST);
+
+  pinMode(RADIO_CE_PIN_1, OUTPUT);
+  pinMode(RADIO_CSN_PIN_1, OUTPUT);
+  digitalWrite(RADIO_CSN_PIN_1, HIGH);
+  digitalWrite(RADIO_CE_PIN_1, LOW);
+  delay(5);
+}
+
+bool nrf24Begin() {
+  initNrf24Spi();
+
+  // Soft reset path: power down any prior state, then re-init
+  radios[0].powerDown();
+  delay(10);
+
+  if (!radios[0].begin()) {
+    return false;
+  }
+  if (!radios[0].isChipConnected()) {
+    return false;
+  }
+
+  radios[0].setAutoAck(false);
+  radios[0].stopListening();
+  radios[0].setRetries(0, 0);
+  radios[0].setPALevel(RF24_PA_MAX, true);
+  radios[0].setDataRate(RF24_2MBPS);
+  radios[0].setCRCLength(RF24_CRC_DISABLED);
+  return true;
+}
+
+void nrf24PowerDown() {
+  radios[0].powerDown();
+  digitalWrite(RADIO_CE_PIN_1, LOW);
+  digitalWrite(RADIO_CSN_PIN_1, HIGH);
+}
 
 bool initBLE() {
     if (esp_bt_controller_get_status() == ESP_BT_CONTROLLER_STATUS_IDLE) {
@@ -88,7 +138,7 @@ bool initWiFi(wifi_mode_t mode) {
 }
 
 void cleanupRadio() {
-    for (auto &r : radios) r.powerDown();
+    nrf24PowerDown();
     cleanupWiFi();
     cleanupBLE();
 }

@@ -87,7 +87,7 @@ struct MenuItem {
   void (*cleanup)();
 };
 
-bool dangerousActionsEnabled = false;
+bool dangerousActionsEnabled = true;  // permanently enabled
 
 const char* nyanboxVersion = NYANBOX_VERSION;
 unsigned long idleTimeout = 120000;
@@ -512,28 +512,14 @@ void setup() {
   Serial.begin(115200);
 
   neopixelSetup();
-  SPI.begin();
 
-  // Single NRF24 module
-  pinMode(RADIO_CE_PIN_1, OUTPUT);
-  pinMode(RADIO_CSN_PIN_1, OUTPUT);
-  digitalWrite(RADIO_CSN_PIN_1, HIGH);
-  digitalWrite(RADIO_CE_PIN_1, LOW);
-  delay(100);
-
-  if (radios[0].begin() && radios[0].isChipConnected()) {
-    radios[0].setAutoAck(false);
-    radios[0].stopListening();
-    radios[0].setRetries(0,0);
-    radios[0].setPALevel(RF24_PA_MAX, true);
-    radios[0].setDataRate(RF24_2MBPS);
-    radios[0].setCRCLength(RF24_CRC_DISABLED);
-  }
+  // Unified single-module NRF24 bring-up
+  nrf24Begin();  // ignores result at boot; features re-init later
 
   EEPROM.begin(512);
   oledBrightness = EEPROM.read(1);
 
-  dangerousActionsEnabled = false;
+  dangerousActionsEnabled = true;  // permanently enabled
 
   loadSleepTimeoutFromEEPROM();
 
@@ -566,14 +552,16 @@ void setup() {
   // ========== Opening Scene 2: doomBOX text splash ==========
   u8g2.clearBuffer();
 
-  // Slightly bigger title
-  u8g2.setFont(u8g2_font_helvB18_tr);
+  // Title - fits fully on screen
+  u8g2.setFont(u8g2_font_helvB14_tr);
   const char* title = "doomBOX";
   int16_t titleW = u8g2.getUTF8Width(title);
-  u8g2.setCursor((128 - titleW) / 2, 15);
+  u8g2.setCursor((128 - titleW) / 2, 14);
   u8g2.print(title);
 
+  // All text below title uses the same tiny font
   u8g2.setFont(u8g2_font_5x8_tr);
+
   const char* url1 = "github.com/";
   int16_t url1W = u8g2.getUTF8Width(url1);
   u8g2.setCursor((128 - url1W) / 2, 26);
@@ -584,7 +572,6 @@ void setup() {
   u8g2.setCursor((128 - url2W) / 2, 34);
   u8g2.print(url2);
 
-  u8g2.setFont(u8g2_font_helvR08_tr);
   const char* credit1 = "made by richard gladson";
   int16_t c1W = u8g2.getUTF8Width(credit1);
   u8g2.setCursor((128 - c1W) / 2, 44);
@@ -595,7 +582,6 @@ void setup() {
   u8g2.setCursor((128 - c2W) / 2, 52);
   u8g2.print(credit2);
 
-  u8g2.setFont(u8g2_font_5x8_tr);
   const char* tag1 = "wireless penetration";
   int16_t t1W = u8g2.getUTF8Width(tag1);
   u8g2.setCursor((128 - t1W) / 2, 58);

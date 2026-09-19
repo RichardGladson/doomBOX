@@ -20,7 +20,7 @@
 
 extern U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2;
 
-RF24 radio_1(RADIO_CE_PIN_1, RADIO_CSN_PIN_1, 16000000);
+// Use the single shared RF24 instance (radios[0]) — do NOT create a second object
 
 enum SigKillMode { SIG_MENU, SIG_WIFI_SELECT, SIG_JAMMING };
 enum ProtocolType { ALL, WIFI, BLUETOOTH, BLE, VIDEO_TX, RC, USB_WIRELESS, ZIGBEE, NRF24 };
@@ -54,30 +54,29 @@ const char* protocolNames[] = {
   "USB Wireless", "Zigbee", "NRF24"
 };
 
-void configureRadio(RF24 &radio, byte initialChannel) {
-  radio.setAutoAck(false);
-  radio.stopListening();
-  radio.setRetries(0, 0);
-  radio.setPALevel(RF24_PA_MAX, true);
-  radio.setDataRate(RF24_2MBPS);
-  radio.setCRCLength(RF24_CRC_DISABLED);
-  radio.startConstCarrier(RF24_PA_MAX, initialChannel);
+static void configureForJamming(byte initialChannel) {
+  radios[0].setAutoAck(false);
+  radios[0].stopListening();
+  radios[0].setRetries(0, 0);
+  radios[0].setPALevel(RF24_PA_MAX, true);
+  radios[0].setDataRate(RF24_2MBPS);
+  radios[0].setCRCLength(RF24_CRC_DISABLED);
+  radios[0].startConstCarrier(RF24_PA_MAX, initialChannel);
 }
 
-void initializeRadios() {
-  SPI.begin();
-  delay(100);
-  radioReady = false;
-  if (radio_1.begin()) {
-    configureRadio(radio_1, 2);
-    radioReady = true;
+static bool initializeRadios() {
+  // Unified SPI + single RF24 instance
+  radioReady = nrf24Begin();
+  if (radioReady) {
+    configureForJamming(2);
   }
+  return radioReady;
 }
 
-void powerDownRadios() {
-  radio_1.powerDown();
+static void powerDownRadios() {
+  nrf24PowerDown();
   radioReady = false;
-  delay(100);
+  delay(50);
 }
 
 static void drawSigMenu() {
@@ -115,7 +114,6 @@ static void drawSigMenu() {
   displayMirrorSend(u8g2);
 }
 
-// WiFi channel selection submenu: 0=All, 1-11=fixed channel
 static void drawWifiSelect() {
   u8g2.clearBuffer();
   u8g2.setFont(u8g2_font_6x10_tr);
@@ -123,8 +121,7 @@ static void drawWifiSelect() {
 
   u8g2.setFont(u8g2_font_5x8_tr);
   const int visible = 4;
-  // 12 options: All + Ch1..Ch11
-  const int totalOptions = 12;
+  const int totalOptions = 12;  // All + Ch1..Ch11
   int start = (wifiChannelSelection / visible) * visible;
 
   for (int i = 0; i < visible; i++) {
@@ -158,7 +155,7 @@ static void drawActiveJamming(const char* protocolName) {
   }
   u8g2.drawStr(0, 12, title);
 
-  u8g2.drawStr(0, 28, "Status: JAMMING");
+  u8g2.drawStr(0, 28, radioReady ? "Status: JAMMING" : "Status: FAIL");
 
   u8g2.setFont(u8g2_font_5x8_tr);
   char radioStatus[32];
@@ -246,7 +243,6 @@ void sigkillLoop() {
         } else if (right) {
           selectedProtocol = (ProtocolType)menuSelection;
           if (selectedProtocol == WIFI) {
-            // Go to WiFi channel selection submenu
             wifiChannelSelection = 0;
             currentMode = SIG_WIFI_SELECT;
           } else {
@@ -275,12 +271,10 @@ void sigkillLoop() {
           needsRedraw = true;
           lastButtonPress = now;
         } else if (right) {
-          // Start jamming with selected WiFi mode
           currentMode = SIG_JAMMING;
           initializeRadios();
-          // If fixed channel, set it immediately
           if (radioReady && wifiChannelSelection > 0) {
-            radio_1.setChannel(wifiChannelSelection);
+            radios[0].setChannel(wifiChannelSelection);
           }
           needsRedraw = true;
           lastButtonPress = now;
@@ -303,7 +297,7 @@ void sigkillLoop() {
         drawActiveJamming(protocolNames[selectedProtocol]);
       }
 
-      {
+      if (radioReady) {
         int randomIndex;
         int channel;
 
@@ -328,63 +322,54 @@ void sigkillLoop() {
 
               randomIndex = random(0, arraySize / sizeof(byte));
               channel = channelArray[randomIndex];
-              if (radioReady) radio_1.setChannel(channel);
+              radios[0].setChannel(channel);
               protocolIndex++;
             }
             break;
 
           case WIFI:
             if (wifiChannelSelection == 0) {
-              // Hop all WiFi channels
               randomIndex = random(0, sizeof(wifi_channels) / sizeof(wifi_channels[0]));
               channel = wifi_channels[randomIndex];
-              if (radioReady) radio_1.setChannel(channel);
+              radios[0].setChannel(channel);
             } else {
-              // Fixed channel 1-11
-              if (radioReady) radio_1.setChannel(wifiChannelSelection);
+              radios[0].setChannel(wifiChannelSelection);
             }
             break;
 
           case BLUETOOTH:
             randomIndex = random(0, sizeof(bluetooth_channels) / sizeof(bluetooth_channels[0]));
-            channel = bluetooth_channels[randomIndex];
-            if (radioReady) radio_1.setChannel(channel);
+            radios[0].setChannel(bluetooth_channels[randomIndex]);
             break;
 
           case BLE:
             randomIndex = random(0, sizeof(ble_channels) / sizeof(ble_channels[0]));
-            channel = ble_channels[randomIndex];
-            if (radioReady) radio_1.setChannel(channel);
+            radios[0].setChannel(ble_channels[randomIndex]);
             break;
 
           case VIDEO_TX:
             randomIndex = random(0, sizeof(videoTransmitter_channels) / sizeof(videoTransmitter_channels[0]));
-            channel = videoTransmitter_channels[randomIndex];
-            if (radioReady) radio_1.setChannel(channel);
+            radios[0].setChannel(videoTransmitter_channels[randomIndex]);
             break;
 
           case RC:
             randomIndex = random(0, sizeof(rc_channels) / sizeof(rc_channels[0]));
-            channel = rc_channels[randomIndex];
-            if (radioReady) radio_1.setChannel(channel);
+            radios[0].setChannel(rc_channels[randomIndex]);
             break;
 
           case USB_WIRELESS:
             randomIndex = random(0, sizeof(usbWireless_channels) / sizeof(usbWireless_channels[0]));
-            channel = usbWireless_channels[randomIndex];
-            if (radioReady) radio_1.setChannel(channel);
+            radios[0].setChannel(usbWireless_channels[randomIndex]);
             break;
 
           case ZIGBEE:
             randomIndex = random(0, sizeof(zigbee_channels) / sizeof(zigbee_channels[0]));
-            channel = zigbee_channels[randomIndex];
-            if (radioReady) radio_1.setChannel(channel);
+            radios[0].setChannel(zigbee_channels[randomIndex]);
             break;
 
           case NRF24:
             randomIndex = random(0, sizeof(nrf24_channels) / sizeof(nrf24_channels[0]));
-            channel = nrf24_channels[randomIndex];
-            if (radioReady) radio_1.setChannel(channel);
+            radios[0].setChannel(nrf24_channels[randomIndex]);
             break;
         }
       }

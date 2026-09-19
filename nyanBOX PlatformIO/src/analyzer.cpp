@@ -122,22 +122,17 @@ void analyzerSetup(){
 
     cleanupRadio();
 
+    // Unified SPI bring-up (does not claim CSN as hardware SS)
+    initNrf24Spi();
+
     pinMode(CE1, OUTPUT);
     pinMode(CSN1, OUTPUT);
-
-    SPI.begin(18, 19, 23, 17);
-    delay(100);
-    SPI.setDataMode(SPI_MODE0);
-    SPI.setFrequency(10000000);
-    SPI.setBitOrder(MSBFIRST);
-
     digitalWrite(CSN1, HIGH);
     digitalWrite(CE1, LOW);
 
     powerUP(CSN1);
     writeRegister(CSN1, NRF24_EN_AA, 0x00);
     writeRegister(CSN1, NRF24_RF_SETUP, 0x0F);
-
 }
 
 void analyzerLoop(){

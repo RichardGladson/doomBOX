@@ -152,26 +152,24 @@ void scannerSetup() {
   Serial.begin(115200);
 
   cleanupRadio();
-  
+
   for (byte count = 0; count <= 128; count++) {
     sensorArray[count] = 0;
   }
 
-  SPI.begin(18, 19, 23, 17);
-  delay(100);
-  SPI.setDataMode(SPI_MODE0);
-  SPI.setFrequency(16000000);
-  SPI.setBitOrder(MSBFIRST);
+  // Unified SPI bring-up (does not claim CSN as hardware SS)
+  initNrf24Spi();
 
   pinMode(CE, OUTPUT);
   pinMode(CSN, OUTPUT);
+  digitalWrite(CSN, HIGH);
+  digitalWrite(CE, LOW);
 
   disable();
 
   powerUp();
   setRegister(_NRF24_EN_AA, 0x0);
   setRegister(_NRF24_RF_SETUP, 0x0F);
-
 }
 
 void scannerLoop() {

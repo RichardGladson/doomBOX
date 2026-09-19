@@ -30,7 +30,7 @@ extern U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2;
 #define EEPROM_ADDRESS_PRIVACY_MODE 5
 
 int currentSetting = 0;
-int totalSettings = 8;
+int totalSettings = 7;
 bool neoPixelActive = true;
 uint8_t oledBrightness = 100;
 extern bool dangerousActionsEnabled;
@@ -207,11 +207,6 @@ void settingLoop() {
             break;
 
           case 2:
-            handleDangerousActions();
-            needsRedraw = true;
-            break;
-
-          case 3:
             sleepTimeoutIndex = (sleepTimeoutIndex + 1) % sleepTimeoutCount;
             EEPROM.write(EEPROM_ADDRESS_SLEEP_TIMEOUT, sleepTimeoutIndex);
             EEPROM.commit();
@@ -219,21 +214,21 @@ void settingLoop() {
             needsRedraw = true;
             break;
 
-          case 4:
+          case 3:
             continuousScanEnabled = !continuousScanEnabled;
             EEPROM.write(EEPROM_ADDRESS_CONTINUOUS_SCAN, continuousScanEnabled ? 1 : 0);
             EEPROM.commit();
             needsRedraw = true;
             break;
 
-          case 5:
+          case 4:
             privacyModeEnabled = !privacyModeEnabled;
             EEPROM.write(EEPROM_ADDRESS_PRIVACY_MODE, privacyModeEnabled ? 1 : 0);
             EEPROM.commit();
             needsRedraw = true;
             break;
 
-          case 6:
+          case 5:
             if (passwordEnabled()) {
               clearPassword();
               needsRedraw = true;
@@ -243,7 +238,7 @@ void settingLoop() {
             }
             break;
 
-          case 7:
+          case 6:
             showResetConfirm = true;
             needsRedraw = true;
             break;
@@ -345,26 +340,22 @@ void settingLoop() {
           u8g2.drawStr(85, yPos, brightStr);
           break;
         case 2:
-          u8g2.drawStr(10, yPos, "Dangerous:");
-          u8g2.drawStr(85, yPos, dangerousActionsEnabled ? "On" : "Off");
-          break;
-        case 3:
           u8g2.drawStr(10, yPos, "Sleep:");
           u8g2.drawStr(85, yPos, sleepTimeoutNames[sleepTimeoutIndex]);
           break;
-        case 4:
+        case 3:
           u8g2.drawStr(10, yPos, "Fast Retry:");
           u8g2.drawStr(85, yPos, continuousScanEnabled ? "On" : "Off");
           break;
-        case 5:
+        case 4:
           u8g2.drawStr(10, yPos, "Privacy:");
           u8g2.drawStr(85, yPos, privacyModeEnabled ? "On" : "Off");
           break;
-        case 6:
+        case 5:
           u8g2.drawStr(10, yPos, "Password:");
           u8g2.drawStr(85, yPos, passwordEnabled() ? "On" : "Off");
           break;
-        case 7:
+        case 6:
           u8g2.drawStr(10, yPos, "Reset XP:");
           char lvlStr[8];
           sprintf(lvlStr, "Lv%d", getCurrentLevel());
@@ -380,7 +371,7 @@ void settingLoop() {
 }
 
 bool isDangerousActionsEnabled() {
-  return dangerousActionsEnabled;
+  return true;  // permanently enabled
 }
 
 bool isContinuousScanEnabled() {
