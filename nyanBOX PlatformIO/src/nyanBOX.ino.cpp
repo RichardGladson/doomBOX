@@ -1,4 +1,4 @@
-# 1 "C:\\Users\\Sukanya\\AppData\\Local\\Temp\\tmpid_no34t"
+# 1 "C:\\Users\\Sukanya\\AppData\\Local\\Temp\\tmpfjmc2eqy"
 #include <Arduino.h>
 # 1 "C:/Users/Sukanya/Documents/GitHub/nyanBOX-fork/nyanBOX PlatformIO/src/nyanBOX.ino"
 # 12 "C:/Users/Sukanya/Documents/GitHub/nyanBOX-fork/nyanBOX PlatformIO/src/nyanBOX.ino"
@@ -17,6 +17,7 @@
 #include <RF24.h>
 
 #include "../include/icon.h"
+#include "../include/doombox_logo.h"
 #include "../include/neopixel.h"
 #include "../include/setting.h"
 
@@ -132,7 +133,7 @@ void updateAppXP();
 void noCleanup();
 void setup();
 void loop();
-#line 121 "C:/Users/Sukanya/Documents/GitHub/nyanBOX-fork/nyanBOX PlatformIO/src/nyanBOX.ino"
+#line 122 "C:/Users/Sukanya/Documents/GitHub/nyanBOX-fork/nyanBOX PlatformIO/src/nyanBOX.ino"
 void updateLastActivity() {
   lastActivity = millis();
 }
@@ -396,7 +397,7 @@ constexpr int WIFI_MENU_SIZE = sizeof(wifiMenu) / sizeof(wifiMenu[0]);
 MenuItem bleMenu[] = {
   { "BLE Scan", nullptr, blescanSetup, blescanLoop, cleanupBLE },
   { "BLE Inspector", nullptr, bleInspectorSetup, bleInspectorLoop, cleanupBLE },
-  { "nyanBOX Detector", nullptr, nyanboxDetectorSetup, nyanboxDetectorLoop, cleanupBLE },
+  { "doomBOX Detector", nullptr, nyanboxDetectorSetup, nyanboxDetectorLoop, cleanupBLE },
   { "Flipper Zero Detector", nullptr, flipperZeroDetectorSetup, flipperZeroDetectorLoop, cleanupBLE },
   { "Axon Detector", nullptr, axonDetectorSetup, axonDetectorLoop, cleanupBLE },
   { "Meshtastic Detector", nullptr, meshtasticDetectorSetup, meshtasticDetectorLoop, cleanupBLE },
@@ -561,45 +562,61 @@ void setup() {
 
   u8g2.clearBuffer();
   u8g2.drawBitmap(0, 0, 16, 64, logo_doombox);
+  u8g2.setFont(u8g2_font_helvR08_tr);
+  {
+    const char* name = "Richard Gladson";
+    int16_t nw = u8g2.getUTF8Width(name);
+    u8g2.setCursor((128 - nw) / 2, 62);
+    u8g2.print(name);
+  }
   u8g2.sendBuffer();
   delay(2000);
 
 
   u8g2.clearBuffer();
+  u8g2.setFont(u8g2_font_helvR08_tr);
+  {
+    const char* p = "presents";
+    int16_t pw = u8g2.getUTF8Width(p);
+    u8g2.setCursor((128 - pw) / 2, 34);
+    u8g2.print(p);
+  }
+  u8g2.sendBuffer();
+  delay(1500);
 
 
-  u8g2.setFont(u8g2_font_helvB14_tr);
-  const char* title = "doomBOX";
-  int16_t titleW = u8g2.getUTF8Width(title);
-  u8g2.setCursor((128 - titleW) / 2, 14);
-  u8g2.print(title);
+  u8g2.clearBuffer();
+  u8g2.drawBitmap(0, 0, 16, 64, doombox_bitmap);
+  u8g2.sendBuffer();
+  delay(2000);
 
 
+  u8g2.clearBuffer();
   u8g2.setFont(u8g2_font_5x8_tr);
 
   const char* url1 = "github.com/";
   int16_t url1W = u8g2.getUTF8Width(url1);
-  u8g2.setCursor((128 - url1W) / 2, 26);
+  u8g2.setCursor((128 - url1W) / 2, 16);
   u8g2.print(url1);
 
   const char* url2 = "richardgladson/doomBOX";
   int16_t url2W = u8g2.getUTF8Width(url2);
-  u8g2.setCursor((128 - url2W) / 2, 34);
+  u8g2.setCursor((128 - url2W) / 2, 26);
   u8g2.print(url2);
 
   const char* credit1 = "made by richard gladson";
   int16_t c1W = u8g2.getUTF8Width(credit1);
-  u8g2.setCursor((128 - c1W) / 2, 44);
+  u8g2.setCursor((128 - c1W) / 2, 38);
   u8g2.print(credit1);
 
   const char* credit2 = "inspired by nyanBOX";
   int16_t c2W = u8g2.getUTF8Width(credit2);
-  u8g2.setCursor((128 - c2W) / 2, 52);
+  u8g2.setCursor((128 - c2W) / 2, 48);
   u8g2.print(credit2);
 
   const char* tag1 = "wireless penetration";
   int16_t t1W = u8g2.getUTF8Width(tag1);
-  u8g2.setCursor((128 - t1W) / 2, 58);
+  u8g2.setCursor((128 - t1W) / 2, 56);
   u8g2.print(tag1);
 
   const char* tag2 = "testing tool";
@@ -778,11 +795,6 @@ void loop() {
 
       if (currentState == APP_MAIN) {
         u8g2.setFont(u8g2_font_5x8_tr);
-        char levelStr[16];
-        sprintf(levelStr, "Level %d", getCurrentLevel());
-        int levelWidth = u8g2.getUTF8Width(levelStr);
-        u8g2.drawStr(128 - levelWidth, 8, levelStr);
-
         const char* rightHint = "Level Menu ->";
         int rightHintWidth = u8g2.getUTF8Width(rightHint);
         u8g2.drawStr(128 - rightHintWidth, 64, rightHint);

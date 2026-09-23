@@ -1,6 +1,6 @@
 /*
-    nyanBOX by Nyan Devices
-    https://github.com/jbohack/nyanBOX
+    doomBOX
+    Based on nyanBOX by Nyan Devices
     Copyright (c) 2025 jbohack
 
     Licensed under the MIT License
@@ -22,5 +22,7 @@ int getCurrentXP();
 int getXPForNextLevel();
 void displayLevelScreen();
 void resetXPData();
+// Raise XP so the player is at least this level (does not lower level)
+void setMinimumLevel(int level);
 
 #endif

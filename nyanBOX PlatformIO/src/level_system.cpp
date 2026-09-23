@@ -1,6 +1,6 @@
 /*
-    nyanBOX by Nyan Devices
-    https://github.com/jbohack/nyanBOX
+    doomBOX
+    https://github.com/richardgladson/doomBOX
     Copyright (c) 2025 jbohack
 
     Licensed under the MIT License
@@ -106,6 +106,18 @@ const char* getRankName(int level) {
   else if (level <= 85) return "Elite";
   else if (level <= 95) return "Godlike";
   else return "Legend";
+}
+
+
+void setMinimumLevel(int level) {
+  if (level < 1) level = 1;
+  if (level > 99) level = 99;
+  int required = getXPRequiredForLevel(level);
+  if (currentXP < required) {
+    currentXP = required;
+    saveLevelData();
+    needsRedraw = true;
+  }
 }
 
 void displayLevelScreen() {
