@@ -34,7 +34,7 @@ void initNrf24Spi() {
   SPI.begin(18, 19, 23, -1);  // SCK, MISO, MOSI, SS
   delay(20);
   SPI.setDataMode(SPI_MODE0);
-  SPI.setFrequency(10000000);
+  SPI.setFrequency(16000000);  // match known-good smoochiee jammer (16 MHz)
   SPI.setBitOrder(MSBFIRST);
 
   pinMode(RADIO_CE_PIN_1, OUTPUT);
@@ -61,6 +61,9 @@ bool nrf24Begin() {
   radios[0].setAutoAck(false);
   radios[0].stopListening();
   radios[0].setRetries(0, 0);
+  // Required for reliable startConstCarrier (smoochiee / RF24 const-carrier path)
+  radios[0].setPayloadSize(5);
+  radios[0].setAddressWidth(3);
   radios[0].setPALevel(RF24_PA_MAX, true);
   radios[0].setDataRate(RF24_2MBPS);
   radios[0].setCRCLength(RF24_CRC_DISABLED);
@@ -71,6 +74,26 @@ void nrf24PowerDown() {
   radios[0].powerDown();
   digitalWrite(RADIO_CE_PIN_1, LOW);
   digitalWrite(RADIO_CSN_PIN_1, HIGH);
+}
+
+void silenceEsp32Rf() {
+  // Mirror smoochiee setup: free the 2.4 GHz band from the ESP32's own radios
+  esp_wifi_set_promiscuous(false);
+  esp_wifi_stop();
+  esp_wifi_deinit();
+
+  if (esp_bluedroid_get_status() == ESP_BLUEDROID_STATUS_ENABLED) {
+    esp_bluedroid_disable();
+  }
+  if (esp_bluedroid_get_status() != ESP_BLUEDROID_STATUS_UNINITIALIZED) {
+    esp_bluedroid_deinit();
+  }
+  if (esp_bt_controller_get_status() == ESP_BT_CONTROLLER_STATUS_ENABLED) {
+    esp_bt_controller_disable();
+  }
+  if (esp_bt_controller_get_status() != ESP_BT_CONTROLLER_STATUS_IDLE) {
+    esp_bt_controller_deinit();
+  }
 }
 
 bool initBLE() {

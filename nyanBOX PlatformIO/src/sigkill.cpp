@@ -23,7 +23,12 @@ extern U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2;
 // Use the single shared RF24 instance (radios[0]) — do NOT create a second object
 
 enum SigKillMode { SIG_MENU, SIG_WIFI_SELECT, SIG_JAMMING };
-enum ProtocolType { ALL, WIFI, BLUETOOTH, BLE, VIDEO_TX, RC, USB_WIRELESS, ZIGBEE, NRF24 };
+enum ProtocolType {
+  ALL, WIFI, BLUETOOTH, BLE, BLE_ADV,
+  VIDEO_TX, RC, USB_WIRELESS, ZIGBEE, NRF24
+};
+
+static const int PROTOCOL_COUNT = 10;
 
 static SigKillMode currentMode = SIG_MENU;
 static ProtocolType selectedProtocol = ALL;
@@ -40,24 +45,37 @@ static int lastWifiChannelSelection = -1;
 static bool radioReady = false;
 
 // Protocol channel definitions
-const byte bluetooth_channels[]        = {32,34,46,48,50,52,0,1,2,4,6,8,22,24,26,28,30,74,76,78,80};
-const byte ble_channels[]              = {2,26,80};
-const byte wifi_channels[]             = {1,2,3,4,5,6,7,8,9,10,11,12};
-const byte usbWireless_channels[]      = {40,50,60};
-const byte videoTransmitter_channels[] = {70,75,80};
-const byte rc_channels[]               = {1,3,5,7};
-const byte zigbee_channels[]           = {11,15,20,25};
-const byte nrf24_channels[]            = {76,78,79};
+// Classic BT list aligned with smoochiee User_control_channel.ino (includes 82/84/86)
+const byte bluetooth_channels[]        = {
+  32, 34, 46, 48, 50, 52, 0, 1, 2, 4, 6, 8, 22, 24, 26, 28, 30,
+  74, 76, 78, 80, 82, 84, 86
+};
+const byte ble_channels[]              = {2, 26, 80};
+// BLE advertising channels 37/38/39 → NRF24 channels ~2 / 26 / 80
+const byte ble_adv_channels[]          = {2, 26, 80};
+const byte wifi_channels[]             = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12};
+const byte usbWireless_channels[]      = {40, 50, 60};
+const byte videoTransmitter_channels[] = {70, 75, 80};
+const byte rc_channels[]               = {1, 3, 5, 7};
+const byte zigbee_channels[]           = {11, 15, 20, 25};
+const byte nrf24_channels[]            = {76, 78, 79};
 
 const char* protocolNames[] = {
-  "All", "WiFi", "Bluetooth", "BLE", "Video TX", "RC",
-  "USB Wireless", "Zigbee", "NRF24"
+  "All", "WiFi", "Bluetooth", "BLE", "BLE ADV Flood",
+  "Video TX", "RC", "USB Wireless", "Zigbee", "NRF24"
 };
+
+// smoochiee-style ±2 sweep state for classic Bluetooth (channels ~2..79)
+static byte btSweepChannel = 45;
+static unsigned int btSweepFlag = 0;
 
 static void configureForJamming(byte initialChannel) {
   radios[0].setAutoAck(false);
   radios[0].stopListening();
   radios[0].setRetries(0, 0);
+  // Match smoochiee VSPI script / RF24 startConstCarrier expectations
+  radios[0].setPayloadSize(5);
+  radios[0].setAddressWidth(3);
   radios[0].setPALevel(RF24_PA_MAX, true);
   radios[0].setDataRate(RF24_2MBPS);
   radios[0].setCRCLength(RF24_CRC_DISABLED);
@@ -65,10 +83,23 @@ static void configureForJamming(byte initialChannel) {
 }
 
 static bool initializeRadios() {
-  // Unified SPI + single RF24 instance
+  // Free ESP32 WiFi/BT from 2.4 GHz before NRF24 carrier (smoochiee setup)
+  silenceEsp32Rf();
+  delay(50);
+
   radioReady = nrf24Begin();
   if (radioReady) {
-    configureForJamming(2);
+    byte startCh = 45;  // smoochiee default start channel
+    if (selectedProtocol == BLE || selectedProtocol == BLE_ADV) {
+      startCh = ble_adv_channels[0];
+    } else if (selectedProtocol == WIFI && wifiChannelSelection > 0) {
+      startCh = (byte)wifiChannelSelection;
+    } else if (selectedProtocol == BLUETOOTH) {
+      startCh = 45;
+      btSweepChannel = 45;
+      btSweepFlag = 0;
+    }
+    configureForJamming(startCh);
   }
   return radioReady;
 }
@@ -86,7 +117,7 @@ static void drawSigMenu() {
 
   int start = (menuSelection / 4) * 4;
 
-  for (int i = 0; i < 4 && (start + i) < 9; i++) {
+  for (int i = 0; i < 4 && (start + i) < PROTOCOL_COUNT; i++) {
     int idx = start + i;
     char line[24];
     snprintf(line, sizeof(line), "%s %s",
@@ -102,9 +133,10 @@ static void drawSigMenu() {
 
   u8g2.drawFrame(scrollbarX, scrollbarY, scrollbarWidth, scrollbarHeight);
 
-  int thumbHeight = (scrollbarHeight * 4) / 9;
+  int thumbHeight = (scrollbarHeight * 4) / PROTOCOL_COUNT;
+  if (thumbHeight < 4) thumbHeight = 4;
   int maxThumbTravel = scrollbarHeight - thumbHeight - 2;
-  int thumbY = scrollbarY + 1 + ((menuSelection * maxThumbTravel) / 8);
+  int thumbY = scrollbarY + 1 + ((menuSelection * maxThumbTravel) / (PROTOCOL_COUNT - 1));
 
   u8g2.drawBox(scrollbarX + 1, thumbY, scrollbarWidth - 2, thumbHeight);
 
@@ -150,6 +182,8 @@ static void drawActiveJamming(const char* protocolName) {
   char title[32];
   if (selectedProtocol == WIFI && wifiChannelSelection > 0) {
     snprintf(title, sizeof(title), "WiFi Ch%d Jam", wifiChannelSelection);
+  } else if (selectedProtocol == BLE_ADV) {
+    snprintf(title, sizeof(title), "BLE ADV Flood");
   } else {
     snprintf(title, sizeof(title), "%s Jamming", protocolName);
   }
@@ -171,6 +205,8 @@ static void drawActiveJamming(const char* protocolName) {
       snprintf(chLine, sizeof(chLine), "Mode: Fixed Ch %d", wifiChannelSelection);
       u8g2.drawStr(0, 52, chLine);
     }
+  } else if (selectedProtocol == BLE_ADV) {
+    u8g2.drawStr(0, 52, "Ch 37/38/39 only");
   }
 
   u8g2.drawStr(0, 62, "L=Back SEL=Exit");
@@ -233,11 +269,11 @@ void sigkillLoop() {
     case SIG_MENU:
       if (now - lastButtonPress > debounceDelay) {
         if (up) {
-          menuSelection = (menuSelection - 1 + 9) % 9;
+          menuSelection = (menuSelection - 1 + PROTOCOL_COUNT) % PROTOCOL_COUNT;
           needsRedraw = true;
           lastButtonPress = now;
         } else if (down) {
-          menuSelection = (menuSelection + 1) % 9;
+          menuSelection = (menuSelection + 1) % PROTOCOL_COUNT;
           needsRedraw = true;
           lastButtonPress = now;
         } else if (right) {
@@ -308,15 +344,16 @@ void sigkillLoop() {
               const byte* channelArray;
               int arraySize;
 
-              switch (protocolIndex % 8) {
+              switch (protocolIndex % 9) {
                 case 0: channelArray = wifi_channels; arraySize = sizeof(wifi_channels); break;
                 case 1: channelArray = bluetooth_channels; arraySize = sizeof(bluetooth_channels); break;
                 case 2: channelArray = ble_channels; arraySize = sizeof(ble_channels); break;
-                case 3: channelArray = videoTransmitter_channels; arraySize = sizeof(videoTransmitter_channels); break;
-                case 4: channelArray = rc_channels; arraySize = sizeof(rc_channels); break;
-                case 5: channelArray = usbWireless_channels; arraySize = sizeof(usbWireless_channels); break;
-                case 6: channelArray = zigbee_channels; arraySize = sizeof(zigbee_channels); break;
-                case 7: channelArray = nrf24_channels; arraySize = sizeof(nrf24_channels); break;
+                case 3: channelArray = ble_adv_channels; arraySize = sizeof(ble_adv_channels); break;
+                case 4: channelArray = videoTransmitter_channels; arraySize = sizeof(videoTransmitter_channels); break;
+                case 5: channelArray = rc_channels; arraySize = sizeof(rc_channels); break;
+                case 6: channelArray = usbWireless_channels; arraySize = sizeof(usbWireless_channels); break;
+                case 7: channelArray = zigbee_channels; arraySize = sizeof(zigbee_channels); break;
+                case 8: channelArray = nrf24_channels; arraySize = sizeof(nrf24_channels); break;
                 default: channelArray = wifi_channels; arraySize = sizeof(wifi_channels); break;
               }
 
@@ -338,13 +375,36 @@ void sigkillLoop() {
             break;
 
           case BLUETOOTH:
-            randomIndex = random(0, sizeof(bluetooth_channels) / sizeof(bluetooth_channels[0]));
-            radios[0].setChannel(bluetooth_channels[randomIndex]);
+            // smoochiee two(): dense ±2 hop across classic BT band (~2..79)
+            if (btSweepFlag == 0) {
+              btSweepChannel = (byte)(btSweepChannel + 2);
+            } else {
+              btSweepChannel = (byte)(btSweepChannel - 2);
+            }
+            if ((btSweepChannel > 79) && (btSweepFlag == 0)) {
+              btSweepFlag = 1;
+            } else if ((btSweepChannel < 2) && (btSweepFlag == 1)) {
+              btSweepFlag = 0;
+            }
+            radios[0].setChannel(btSweepChannel);
             break;
 
           case BLE:
-            randomIndex = random(0, sizeof(ble_channels) / sizeof(ble_channels[0]));
-            radios[0].setChannel(ble_channels[randomIndex]);
+            // Rapid sequential cycle on BLE advertising channels
+            {
+              static int bleIdx = 0;
+              radios[0].setChannel(ble_channels[bleIdx]);
+              bleIdx = (bleIdx + 1) % 3;
+            }
+            break;
+
+          case BLE_ADV:
+            // Rapid cycle only on BLE advertising channels 37/38/39
+            {
+              static int advIdx = 0;
+              radios[0].setChannel(ble_adv_channels[advIdx]);
+              advIdx = (advIdx + 1) % 3;
+            }
             break;
 
           case VIDEO_TX:

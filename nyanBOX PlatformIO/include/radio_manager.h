@@ -29,6 +29,10 @@ bool nrf24Begin();
 // Power down the shared NRF24
 void nrf24PowerDown();
 
+// Stop ESP32 WiFi + Bluetooth radios so they do not compete on 2.4 GHz
+// while the NRF24 is jamming (smoochiee-style isolation).
+void silenceEsp32Rf();
+
 bool initBLE();
 void cleanupBLE();
 bool initWiFi(wifi_mode_t mode);
