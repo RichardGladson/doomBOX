@@ -49,6 +49,7 @@
 #include "../include/client_sniffer.h"
 #include "../include/deauth.h"
 #include "../include/deauth_scanner.h"
+#include "../include/handshake_capture.h"
 #include "../include/beacon_spam.h"
 #include "../include/pwnagotchi_detector.h"
 #include "../include/pindefs.h"
@@ -375,6 +376,8 @@ MenuItem wifiMenu[] = {
   { "Pineapple Detector", nullptr, pineappleDetectorSetup, pineappleDetectorLoop, cleanupWiFi },
   { "Pwnagotchi Detector", nullptr, pwnagotchiDetectorSetup, pwnagotchiDetectorLoop, cleanupWiFi },
   { "Pwnagotchi Spam", nullptr, pwnagotchiSpamSetup,     pwnagotchiSpamLoop,     cleanupWiFi },
+  { "HS Capture",      nullptr, handshakeCaptureSetup,   handshakeCaptureLoop,   cleanupWiFi },
+  { "HS View",         nullptr, handshakeViewSetup,      handshakeViewLoop,      cleanupWiFi },
   { "Back",            nullptr, nullptr,                 nullptr,                noCleanup }
 };
 constexpr int WIFI_MENU_SIZE = sizeof(wifiMenu) / sizeof(wifiMenu[0]);
