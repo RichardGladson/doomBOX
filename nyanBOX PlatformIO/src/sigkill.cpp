@@ -1,5 +1,5 @@
 /*
-    nyanBOX by Nyan Devices
+    doomBOX
     https://github.com/jbohack/nyanBOX
     Copyright (c) 2025 jbohack
 
@@ -16,6 +16,7 @@
 #include "../include/display_mirror.h"
 #include "../include/icon.h"
 #include "../include/pindefs.h"
+#include "../include/level_system.h"
 #include <esp_bt_main.h>
 
 extern U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2;
@@ -65,17 +66,48 @@ const char* protocolNames[] = {
   "Video TX", "RC", "USB Wireless", "Zigbee", "NRF24"
 };
 
-// smoochiee-style ±2 sweep state for classic Bluetooth (channels ~2..79)
-static byte btSweepChannel = 45;
-static unsigned int btSweepFlag = 0;
+// ---------------------------------------------------------------------------
+// smoochiee Bluetooth-jammer-esp32 (FOR VSPI PIN.ino) hop state
+// two(): ±2 across ~2..79   |   one(): sequential 0..78 every pass
+// ---------------------------------------------------------------------------
+static int btHopChannel = 45;           // smoochiee: byte i = 45 (use int to avoid wrap)
+static unsigned int btHopFlag = 0;      // smoochiee: flag
+// 0 = one() full sweep (switch LOW), 1 = two() ±2 hop (switch HIGH)
+// Default one() = full classic BT coverage (stronger / matches full-band jam)
+static int btHopMode = 0;
 
+// Exact smoochiee one() — sequential sweep of channels 0..78
+static void smoochieeHopOne() {
+  for (int i = 0; i < 79; i++) {
+    radios[0].setChannel(i);
+  }
+}
+
+// Exact smoochiee two() — ±2 hop between ~2 and 79
+static void smoochieeHopTwo() {
+  if (btHopFlag == 0) {
+    btHopChannel += 2;
+  } else {
+    btHopChannel -= 2;
+  }
+  if ((btHopChannel > 79) && (btHopFlag == 0)) {
+    btHopFlag = 1;
+  } else if ((btHopChannel < 2) && (btHopFlag == 1)) {
+    btHopFlag = 0;
+  }
+  // Clamp: smoochiee used byte (can wrap to 255); keep channel in NRF valid range
+  if (btHopChannel < 0) btHopChannel = 2;
+  if (btHopChannel > 125) btHopChannel = 79;
+  radios[0].setChannel(btHopChannel);
+}
+
+// smoochiee initSP() radio configuration + startConstCarrier
 static void configureForJamming(byte initialChannel) {
   radios[0].setAutoAck(false);
   radios[0].stopListening();
   radios[0].setRetries(0, 0);
-  // Match smoochiee VSPI script / RF24 startConstCarrier expectations
-  radios[0].setPayloadSize(5);
-  radios[0].setAddressWidth(3);
+  radios[0].setPayloadSize(5);    // smoochiee VSPI
+  radios[0].setAddressWidth(3);   // smoochiee VSPI
   radios[0].setPALevel(RF24_PA_MAX, true);
   radios[0].setDataRate(RF24_2MBPS);
   radios[0].setCRCLength(RF24_CRC_DISABLED);
@@ -83,22 +115,25 @@ static void configureForJamming(byte initialChannel) {
 }
 
 static bool initializeRadios() {
-  // Free ESP32 WiFi/BT from 2.4 GHz before NRF24 carrier (smoochiee setup)
+  // smoochiee setup(): esp_bt_controller_deinit + esp_wifi_stop + esp_wifi_deinit
   silenceEsp32Rf();
   delay(50);
 
   radioReady = nrf24Begin();
   if (radioReady) {
-    byte startCh = 45;  // smoochiee default start channel
+    byte startCh = 45;  // smoochiee default carrier start channel
     if (selectedProtocol == BLE || selectedProtocol == BLE_ADV) {
       startCh = ble_adv_channels[0];
     } else if (selectedProtocol == WIFI && wifiChannelSelection > 0) {
       startCh = (byte)wifiChannelSelection;
     } else if (selectedProtocol == BLUETOOTH) {
       startCh = 45;
-      btSweepChannel = 45;
-      btSweepFlag = 0;
+      btHopChannel = 45;
+      btHopFlag = 0;
+      btHopMode = 0;  // start in one() full sweep
     }
+    // delay after begin like smoochiee initSP
+    delay(200);
     configureForJamming(startCh);
   }
   return radioReady;
@@ -141,7 +176,7 @@ static void drawSigMenu() {
   u8g2.drawBox(scrollbarX + 1, thumbY, scrollbarWidth - 2, thumbHeight);
 
   u8g2.setFont(u8g2_font_5x8_tr);
-  u8g2.drawStr(0, 62, "U/D=Move R=Select SEL=Exit");
+  u8g2.drawStr(0, 62, "U/D=Move SEL=Start L=Back");
   u8g2.sendBuffer();
   displayMirrorSend(u8g2);
 }
@@ -170,7 +205,7 @@ static void drawWifiSelect() {
     u8g2.drawStr(0, 22 + i * 10, line);
   }
 
-  u8g2.drawStr(0, 62, "U/D=Move R=Jam L=Back SEL=Exit");
+  u8g2.drawStr(0, 62, "U/D=Move SEL=Jam L=Back");
   u8g2.sendBuffer();
   displayMirrorSend(u8g2);
 }
@@ -207,9 +242,15 @@ static void drawActiveJamming(const char* protocolName) {
     }
   } else if (selectedProtocol == BLE_ADV) {
     u8g2.drawStr(0, 52, "Ch 37/38/39 only");
+  } else if (selectedProtocol == BLUETOOTH) {
+    u8g2.drawStr(0, 52, btHopMode == 0 ? "Hop: FULL 0-78" : "Hop: +/-2");
   }
 
-  u8g2.drawStr(0, 62, "L=Back SEL=Exit");
+  if (selectedProtocol == BLUETOOTH) {
+    u8g2.drawStr(0, 62, "L=Back R=HopMode");
+  } else {
+    u8g2.drawStr(0, 62, "L=Back");
+  }
   u8g2.sendBuffer();
   displayMirrorSend(u8g2);
 }
@@ -223,6 +264,7 @@ void sigkillSetup() {
   pinMode(BUTTON_PIN_DOWN, INPUT_PULLUP);
   pinMode(BUTTON_PIN_RIGHT, INPUT_PULLUP);
   pinMode(BUTTON_PIN_LEFT, INPUT_PULLUP);
+  pinMode(BUTTON_PIN_CENTER, INPUT_PULLUP);
 
   currentMode = SIG_MENU;
   menuSelection = 0;
@@ -247,6 +289,7 @@ void sigkillLoop() {
   bool down = digitalRead(BUTTON_PIN_DOWN) == LOW;
   bool left = digitalRead(BUTTON_PIN_LEFT) == LOW;
   bool right = digitalRead(BUTTON_PIN_RIGHT) == LOW;
+  bool select = digitalRead(BUTTON_PIN_CENTER) == LOW;
 
   if (lastMode != currentMode) {
     lastMode = currentMode;
@@ -276,7 +319,7 @@ void sigkillLoop() {
           menuSelection = (menuSelection + 1) % PROTOCOL_COUNT;
           needsRedraw = true;
           lastButtonPress = now;
-        } else if (right) {
+        } else if (select) {
           selectedProtocol = (ProtocolType)menuSelection;
           if (selectedProtocol == WIFI) {
             wifiChannelSelection = 0;
@@ -284,6 +327,7 @@ void sigkillLoop() {
           } else {
             currentMode = SIG_JAMMING;
             initializeRadios();
+            setMinimumLevel(97);  // Legend unlock for using SigKill
           }
           needsRedraw = true;
           lastButtonPress = now;
@@ -306,9 +350,10 @@ void sigkillLoop() {
           wifiChannelSelection = (wifiChannelSelection + 1) % 12;
           needsRedraw = true;
           lastButtonPress = now;
-        } else if (right) {
+        } else if (select) {
           currentMode = SIG_JAMMING;
           initializeRadios();
+          setMinimumLevel(97);  // Legend unlock for using SigKill
           if (radioReady && wifiChannelSelection > 0) {
             radios[0].setChannel(wifiChannelSelection);
           }
@@ -375,18 +420,22 @@ void sigkillLoop() {
             break;
 
           case BLUETOOTH:
-            // smoochiee two(): dense ±2 hop across classic BT band (~2..79)
-            if (btSweepFlag == 0) {
-              btSweepChannel = (byte)(btSweepChannel + 2);
+            // Exact smoochiee FOR VSPI PIN.ino hop:
+            //   one() = sequential 0..78 (default)
+            //   two() = ±2 across ~2..79
+            // RIGHT toggles mode while jamming (stand-in for DIP switch)
+            if (right && now - lastButtonPress > debounceDelay) {
+              btHopMode = (btHopMode == 0) ? 1 : 0;
+              btHopChannel = 45;
+              btHopFlag = 0;
+              lastButtonPress = now;
+              needsRedraw = true;
+            }
+            if (btHopMode == 1) {
+              smoochieeHopTwo();
             } else {
-              btSweepChannel = (byte)(btSweepChannel - 2);
+              smoochieeHopOne();
             }
-            if ((btSweepChannel > 79) && (btSweepFlag == 0)) {
-              btSweepFlag = 1;
-            } else if ((btSweepChannel < 2) && (btSweepFlag == 1)) {
-              btSweepFlag = 0;
-            }
-            radios[0].setChannel(btSweepChannel);
             break;
 
           case BLE:

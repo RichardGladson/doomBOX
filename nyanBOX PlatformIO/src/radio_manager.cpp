@@ -77,10 +77,12 @@ void nrf24PowerDown() {
 }
 
 void silenceEsp32Rf() {
-  // Mirror smoochiee setup: free the 2.4 GHz band from the ESP32's own radios
+  // smoochiee FOR VSPI PIN.ino setup():
+  //   esp_bt_controller_deinit();
+  //   esp_wifi_stop();
+  //   esp_wifi_deinit();
+  // Bluedroid must be torn down before controller deinit on current IDF.
   esp_wifi_set_promiscuous(false);
-  esp_wifi_stop();
-  esp_wifi_deinit();
 
   if (esp_bluedroid_get_status() == ESP_BLUEDROID_STATUS_ENABLED) {
     esp_bluedroid_disable();
@@ -92,8 +94,11 @@ void silenceEsp32Rf() {
     esp_bt_controller_disable();
   }
   if (esp_bt_controller_get_status() != ESP_BT_CONTROLLER_STATUS_IDLE) {
-    esp_bt_controller_deinit();
+    esp_bt_controller_deinit();  // smoochiee: esp_bt_controller_deinit()
   }
+
+  esp_wifi_stop();    // smoochiee
+  esp_wifi_deinit();  // smoochiee
 }
 
 bool initBLE() {
