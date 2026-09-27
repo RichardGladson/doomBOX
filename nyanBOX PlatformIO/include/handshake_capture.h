@@ -12,7 +12,6 @@
 #ifndef HANDSHAKE_CAPTURE_H
 #define HANDSHAKE_CAPTURE_H
 
-#include <U8g2lib.h>
 #include <Arduino.h>
 
 void handshakeCaptureSetup();

