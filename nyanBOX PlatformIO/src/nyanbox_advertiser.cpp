@@ -99,8 +99,12 @@ void startNyanboxAdvertiser() {
     if (advertiserEnabled) return;
     
     advertiserEnabled = true;
-    
-    initBLE();
+
+    if (!initBLE()) {
+        // BLE failed – leave advertiserEnabled true so updateNyanboxAdvertiser can retry
+        advertiserActive = false;
+        return;
+    }
 
     buildAdvertisementData();
     
@@ -122,18 +126,18 @@ void stopNyanboxAdvertiser() {
 
 void updateNyanboxAdvertiser() {
     if (!advertiserEnabled || advertiserActive) return;
-    
-    if (!advertiserActive) {
-        initBLE();
 
-        buildAdvertisementData();
-        
-        esp_ble_gap_config_adv_data_raw(advData, advDataLen);
-        esp_ble_gap_config_scan_rsp_data_raw(scanRespData, scanRespDataLen);
-        esp_ble_gap_start_advertising(&adv_params);
-        
-        advertiserActive = true;
+    if (!initBLE()) {
+        return;  // retry next loop
     }
+
+    buildAdvertisementData();
+
+    esp_ble_gap_config_adv_data_raw(advData, advDataLen);
+    esp_ble_gap_config_scan_rsp_data_raw(scanRespData, scanRespDataLen);
+    esp_ble_gap_start_advertising(&adv_params);
+
+    advertiserActive = true;
 }
 
 bool isNyanboxAdvertising() {

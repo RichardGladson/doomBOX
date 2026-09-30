@@ -44,6 +44,7 @@ static SigKillMode lastMode = SIG_MENU;
 static ProtocolType lastProtocol = ALL;
 static int lastWifiChannelSelection = -1;
 static bool radioReady = false;
+static bool bleOnlyMode = false;  // home shortcut: BT/BLE protocols only
 
 // Protocol channel definitions
 // Classic BT list aligned with smoochiee User_control_channel.ino (includes 82/84/86)
@@ -145,19 +146,38 @@ static void powerDownRadios() {
   delay(50);
 }
 
+// BLE-only protocol indices into protocolNames / ProtocolType
+static const int BLE_ONLY_PROTOCOLS[] = { BLUETOOTH, BLE, BLE_ADV };
+static const int BLE_ONLY_COUNT = 3;
+
+static int effectiveProtocolCount() {
+  return bleOnlyMode ? BLE_ONLY_COUNT : PROTOCOL_COUNT;
+}
+
+static ProtocolType protocolAtMenuIndex(int idx) {
+  if (bleOnlyMode) {
+    if (idx < 0) idx = 0;
+    if (idx >= BLE_ONLY_COUNT) idx = BLE_ONLY_COUNT - 1;
+    return (ProtocolType)BLE_ONLY_PROTOCOLS[idx];
+  }
+  return (ProtocolType)idx;
+}
+
 static void drawSigMenu() {
   u8g2.clearBuffer();
   u8g2.setFont(u8g2_font_6x10_tr);
-  u8g2.drawStr(0, 10, "SigKill Mode:");
+  u8g2.drawStr(0, 10, bleOnlyMode ? "BT SigKill:" : "SigKill Mode:");
 
+  int count = effectiveProtocolCount();
   int start = (menuSelection / 4) * 4;
 
-  for (int i = 0; i < 4 && (start + i) < PROTOCOL_COUNT; i++) {
+  for (int i = 0; i < 4 && (start + i) < count; i++) {
     int idx = start + i;
+    ProtocolType pt = protocolAtMenuIndex(idx);
     char line[24];
     snprintf(line, sizeof(line), "%s %s",
              (idx == menuSelection) ? ">" : " ",
-             protocolNames[idx]);
+             protocolNames[pt]);
     u8g2.drawStr(0, 22 + (i * 10), line);
   }
 
@@ -168,10 +188,13 @@ static void drawSigMenu() {
 
   u8g2.drawFrame(scrollbarX, scrollbarY, scrollbarWidth, scrollbarHeight);
 
-  int thumbHeight = (scrollbarHeight * 4) / PROTOCOL_COUNT;
+  int thumbHeight = (scrollbarHeight * 4) / max(count, 1);
   if (thumbHeight < 4) thumbHeight = 4;
   int maxThumbTravel = scrollbarHeight - thumbHeight - 2;
-  int thumbY = scrollbarY + 1 + ((menuSelection * maxThumbTravel) / (PROTOCOL_COUNT - 1));
+  int thumbY = scrollbarY + 1;
+  if (count > 1) {
+    thumbY = scrollbarY + 1 + ((menuSelection * maxThumbTravel) / (count - 1));
+  }
 
   u8g2.drawBox(scrollbarX + 1, thumbY, scrollbarWidth - 2, thumbHeight);
 
@@ -266,6 +289,7 @@ void sigkillSetup() {
   pinMode(BUTTON_PIN_LEFT, INPUT_PULLUP);
   pinMode(BUTTON_PIN_CENTER, INPUT_PULLUP);
 
+  bleOnlyMode = false;
   currentMode = SIG_MENU;
   menuSelection = 0;
   selectedProtocol = ALL;
@@ -276,6 +300,35 @@ void sigkillSetup() {
   lastMenuSelection = -1;
   lastMode = SIG_MENU;
   lastProtocol = ALL;
+  lastWifiChannelSelection = -1;
+
+  powerDownRadios();
+  drawSigMenu();
+}
+
+// Home-menu shortcut: Bluetooth / BLE / BLE ADV only
+void sigkillBleSetup() {
+  Serial.begin(115200);
+
+  cleanupRadio();
+
+  pinMode(BUTTON_PIN_UP, INPUT_PULLUP);
+  pinMode(BUTTON_PIN_DOWN, INPUT_PULLUP);
+  pinMode(BUTTON_PIN_RIGHT, INPUT_PULLUP);
+  pinMode(BUTTON_PIN_LEFT, INPUT_PULLUP);
+  pinMode(BUTTON_PIN_CENTER, INPUT_PULLUP);
+
+  bleOnlyMode = true;
+  currentMode = SIG_MENU;
+  menuSelection = 0;
+  selectedProtocol = BLUETOOTH;
+  wifiChannelSelection = 0;
+  radioReady = false;
+
+  needsRedraw = true;
+  lastMenuSelection = -1;
+  lastMode = SIG_MENU;
+  lastProtocol = BLUETOOTH;
   lastWifiChannelSelection = -1;
 
   powerDownRadios();
@@ -311,16 +364,17 @@ void sigkillLoop() {
   switch (currentMode) {
     case SIG_MENU:
       if (now - lastButtonPress > debounceDelay) {
+        int count = effectiveProtocolCount();
         if (up) {
-          menuSelection = (menuSelection - 1 + PROTOCOL_COUNT) % PROTOCOL_COUNT;
+          menuSelection = (menuSelection - 1 + count) % count;
           needsRedraw = true;
           lastButtonPress = now;
         } else if (down) {
-          menuSelection = (menuSelection + 1) % PROTOCOL_COUNT;
+          menuSelection = (menuSelection + 1) % count;
           needsRedraw = true;
           lastButtonPress = now;
         } else if (select) {
-          selectedProtocol = (ProtocolType)menuSelection;
+          selectedProtocol = protocolAtMenuIndex(menuSelection);
           if (selectedProtocol == WIFI) {
             wifiChannelSelection = 0;
             currentMode = SIG_WIFI_SELECT;

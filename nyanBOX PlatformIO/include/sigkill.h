@@ -23,6 +23,7 @@
 #include "neopixel.h"
 
 void sigkillSetup();
+void sigkillBleSetup();  // Bluetooth/BLE only (home shortcut)
 void sigkillLoop();
 
 #endif

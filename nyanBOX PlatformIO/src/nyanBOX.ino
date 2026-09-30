@@ -72,6 +72,7 @@
 #include "../include/display_mirror.h"
 #include "../include/password.h"
 #include "../include/radio_manager.h"
+#include "../include/superscanner.h"
 
 RF24 radios[] = {
   RF24(RADIO_CE_PIN_1, RADIO_CSN_PIN_1)
@@ -92,9 +93,7 @@ struct MenuItem {
 bool dangerousActionsEnabled = true;  // permanently enabled
 
 const char* nyanboxVersion = NYANBOX_VERSION;
-unsigned long idleTimeout = 120000;
 static unsigned long lastActivity = 0;
-static bool displayOff = false;
 const unsigned long MAX_XP_IDLE_TIME = 120000;
 
 unsigned long upLastMillis    = 0;
@@ -119,13 +118,15 @@ const unsigned long repeatInterval = 250;
 const unsigned long debounceDelay  = 200;
 
 static bool needsRedraw = true;
+static bool advertiserBootPending = true;
 
 void updateLastActivity() {
   lastActivity = millis();
 }
 
+// Sleep feature removed – stubs kept so existing includes still compile
 void updateSleepTimeout(unsigned long newTimeout) {
-  idleTimeout = newTimeout;
+  (void)newTimeout;
 }
 
 bool anyButtonPressed() {
@@ -136,55 +137,12 @@ bool anyButtonPressed() {
         digitalRead(BUTTON_PIN_LEFT)  == LOW;
 }
 
-
-void loadSleepTimeoutFromEEPROM() {
-  uint8_t sleepTimeoutValue = EEPROM.read(3);
-  const unsigned long sleepTimeouts[] = {15, 30, 60, 120, 300, 900, 1800, 0};
-  if (sleepTimeoutValue < 8) {
-    updateSleepTimeout(sleepTimeouts[sleepTimeoutValue] * 1000);
-  } else {
-    updateSleepTimeout(120000);
-  }
-}
-
-
 void wakeDisplay() {
-  u8g2.setPowerSave(0);
-  displayOff = false;
-  while (anyButtonPressed()) {}
-
-  upDebounceTime = 0;
-  downDebounceTime = 0;
-  selDebounceTime = 0;
-  leftDebounceTime = 0;
-  rightDebounceTime = 0;
-
-  upPressed = false;
-  downPressed = false;
-  selPrev = false;
-  leftPrev = false;
-  rightPrev = false;
-
-  updateLastActivity();
-  needsRedraw = true;
+  // no-op (sleep removed)
 }
 
 void checkIdle() {
-  if (idleTimeout == 0) {
-    return;
-  }
-
-  if (!displayOff && millis() - lastActivity >= idleTimeout) {
-    u8g2.setPowerSave(1);
-    displayOff = true;
-    return;
-  }
-  if (displayOff && anyButtonPressed()) {
-    delay(10);
-    if (anyButtonPressed()) {
-      wakeDisplay();
-    }
-  }
+  // no-op (sleep removed)
 }
 
 const int ITEM_HEIGHT = 16;
@@ -202,17 +160,8 @@ void drawSelection(int x, int y, int width, int height, bool selected) {
 
 enum AppMenuState { APP_MAIN, APP_BLE, APP_WIFI, APP_OTHER, APP_LEVEL };
 
-int getXPAmount(const char* appName) {
-  if (isReconApp(appName)) {
-    return 3;
-  } else if (isOffensiveApp(appName)) {
-    return 4;
-  } else if (isUtilityApp(appName)) {
-    return 2;
-  } else {
-    return 0;
-  }
-}
+// XP: every second spent in any function awards ~3 XP
+static const int XP_PER_SECOND = 3;
 
 bool isReconApp(const char* appName) {
   return strstr(appName, "Scan") != nullptr || 
@@ -249,6 +198,7 @@ AppMenuState currentState = APP_MAIN;
 MenuItem*    currentMenuItems = nullptr;
 int          currentMenuSize  = 0;
 int          item_selected    = 0;
+int          mainMenuColumn   = 0;  // 0 = categories (WiFi/BLE/Other), 1 = shortcuts
 
 constexpr uint8_t BUTTON_UP    = BUTTON_PIN_UP;
 constexpr uint8_t BUTTON_SEL   = BUTTON_PIN_CENTER;
@@ -259,11 +209,9 @@ constexpr uint8_t BUTTON_LEFT  = BUTTON_PIN_LEFT;
 static unsigned long appStartTime = 0;
 static unsigned long lastXPReward = 0;
 static const char* currentAppName = "";
-static int currentXPAmount = 0;
 static bool inApplication = false;
 static int pendingXP = 0;
-static unsigned long totalActiveMinutes = 0;
-const unsigned long XP_REWARD_INTERVAL = 60000;
+const unsigned long XP_REWARD_INTERVAL = 1000;  // award XP every second
 
 bool justPressed(uint8_t pin, bool &prev, unsigned long &debounceTime) {
   bool now = digitalRead(pin) == LOW;
@@ -282,7 +230,25 @@ bool shouldShowApp(const char* appName) {
   return !isDangerousApp(appName) || isDangerousActionsEnabled();
 }
 
+// Forward declarations – defined later with the rest of the menus
+extern MenuItem mainMenu[];
+extern MenuItem shortcutMenu[];
+constexpr int MAIN_MENU_SIZE = 3;
+constexpr int SHORTCUT_MENU_SIZE = 3;
+
 int getVisibleMenuSize() {
+  // On main menu, size depends on which column is focused
+  if (currentState == APP_MAIN) {
+    if (mainMenuColumn == 1) {
+      int count = 0;
+      for (int i = 0; i < SHORTCUT_MENU_SIZE; i++) {
+        if (shouldShowApp(shortcutMenu[i].name)) count++;
+      }
+      return count;
+    }
+    return MAIN_MENU_SIZE;
+  }
+
   int count = 0;
   for (int i = 0; i < currentMenuSize; i++) {
     if (shouldShowApp(currentMenuItems[i].name)) {
@@ -293,6 +259,19 @@ int getVisibleMenuSize() {
 }
 
 MenuItem* getVisibleMenuItem(int visibleIndex) {
+  if (currentState == APP_MAIN && mainMenuColumn == 1) {
+    int visibleCount = 0;
+    for (int i = 0; i < SHORTCUT_MENU_SIZE; i++) {
+      if (shouldShowApp(shortcutMenu[i].name)) {
+        if (visibleCount == visibleIndex) {
+          return &shortcutMenu[i];
+        }
+        visibleCount++;
+      }
+    }
+    return &shortcutMenu[0];
+  }
+
   int visibleCount = 0;
   for (int i = 0; i < currentMenuSize; i++) {
     if (shouldShowApp(currentMenuItems[i].name)) {
@@ -303,27 +282,22 @@ MenuItem* getVisibleMenuItem(int visibleIndex) {
     }
   }
 
+  if (currentMenuItems == nullptr) return &mainMenu[0];
   return &currentMenuItems[0];
 }
 
 
 void startAppTracking(const char* appName) {
   currentAppName = appName;
-  currentXPAmount = getXPAmount(appName);
   appStartTime = millis();
   lastXPReward = appStartTime;
-  totalActiveMinutes = 0;
+  pendingXP = 0;
   inApplication = true;
 }
 
 void stopAppTracking() {
   if (inApplication) {
-    if (totalActiveMinutes >= 10) {
-      pendingXP += 12;
-    } else if (totalActiveMinutes >= 5) {
-      pendingXP += 4;
-    }
-
+    // Flush any remaining pending XP
     if (pendingXP > 0) {
       addXP(pendingXP);
       pendingXP = 0;
@@ -331,7 +305,6 @@ void stopAppTracking() {
 
     inApplication = false;
     currentAppName = "";
-    currentXPAmount = 0;
 
     updateLastActivity();
   }
@@ -340,15 +313,16 @@ void stopAppTracking() {
 void updateAppXP() {
   if (!inApplication) return;
 
-  bool currentlyActive = (millis() - lastActivity < MAX_XP_IDLE_TIME);
-
-  if (currentlyActive && millis() - lastXPReward >= XP_REWARD_INTERVAL) {
-    totalActiveMinutes++;
-
-    if (currentXPAmount > 0) {
-      pendingXP += currentXPAmount;
-    }
+  // Award ~3 XP for every second spent in the current function
+  if (millis() - lastXPReward >= XP_REWARD_INTERVAL) {
+    pendingXP += XP_PER_SECOND;
     lastXPReward = millis();
+
+    // Apply in small batches so progress feels responsive
+    if (pendingXP >= XP_PER_SECOND) {
+      addXP(pendingXP);
+      pendingXP = 0;
+    }
   }
 }
 
@@ -363,7 +337,13 @@ MenuItem mainMenu[] = {
   { "BLE",   bitmap_icon_ble,     nullptr, nullptr, noCleanup },
   { "Other", bitmap_icon_analyzer, nullptr, nullptr, noCleanup }
 };
-constexpr int MAIN_MENU_SIZE = sizeof(mainMenu) / sizeof(mainMenu[0]);
+
+// Shortcut column on main menu – full entry points (not mere redirects)
+MenuItem shortcutMenu[] = {
+  { "WiFi Scan",       bitmap_icon_wifi,  wifiscanSetup,         wifiscanLoop,         wifiscanCleanup },
+  { "BT SigKill",      bitmap_icon_kill,  sigkillBleSetup,       sigkillLoop,          cleanupRadio },
+  { "AirTag",          bitmap_icon_apple, airtagDetectorSetup,   airtagDetectorLoop,   cleanupBLE }
+};
 
 MenuItem wifiMenu[] = {
   { "WiFi Scan",       nullptr, wifiscanSetup,           wifiscanLoop,           wifiscanCleanup },
@@ -376,8 +356,7 @@ MenuItem wifiMenu[] = {
   { "Pineapple Detector", nullptr, pineappleDetectorSetup, pineappleDetectorLoop, cleanupWiFi },
   { "Pwnagotchi Detector", nullptr, pwnagotchiDetectorSetup, pwnagotchiDetectorLoop, cleanupWiFi },
   { "Pwnagotchi Spam", nullptr, pwnagotchiSpamSetup,     pwnagotchiSpamLoop,     cleanupWiFi },
-  { "HS Capture",      nullptr, handshakeCaptureSetup,   handshakeCaptureLoop,   cleanupWiFi },
-  { "HS View",         nullptr, handshakeViewSetup,      handshakeViewLoop,      cleanupWiFi },
+  { "Handshake Capture", nullptr, handshakeCaptureSetup, handshakeCaptureLoop, cleanupWiFi },
   { "Back",            nullptr, nullptr,                 nullptr,                noCleanup }
 };
 constexpr int WIFI_MENU_SIZE = sizeof(wifiMenu) / sizeof(wifiMenu[0]);
@@ -407,6 +386,7 @@ constexpr int BLE_MENU_SIZE = sizeof(bleMenu) / sizeof(bleMenu[0]);
 
 MenuItem otherMenu[] = {
   { "SigKill",   nullptr, sigkillSetup,   sigkillLoop,   cleanupRadio },
+  { "Superscanner", nullptr, superscannerSetup, superscannerLoop, superscannerCleanup },
   { "Drone Detector", nullptr, droneDetectorSetup, droneDetectorLoop, cleanupDroneDetector },
   { "Drone Spoofer", nullptr, droneSpooferSetup, droneSpooferLoop, cleanupDroneSpoofer },
   { "Flock Detector", nullptr, flockDetectorSetup, flockDetectorLoop, cleanupFlockDetector },
@@ -420,25 +400,22 @@ MenuItem otherMenu[] = {
 constexpr int OTHER_MENU_SIZE = sizeof(otherMenu) / sizeof(otherMenu[0]);
 
 void enterMenu(AppMenuState st) {
+  // Save previous selection name only if a menu is already loaded
+  const char* previousAppName = nullptr;
+  if (currentMenuItems != nullptr && currentMenuSize > 0 &&
+      item_selected >= 0 && item_selected < getVisibleMenuSize()) {
+    MenuItem* prev = getVisibleMenuItem(item_selected);
+    if (prev) previousAppName = prev->name;
+  }
+
   currentState = st;
 
-  int previousSelection = item_selected;
-  const char* previousAppName = nullptr;
-
-  if (item_selected < getVisibleMenuSize()) {
-    previousAppName = getVisibleMenuItem(item_selected)->name;
-  }
-
-  if (st == APP_MAIN) {
-    startNyanboxAdvertiser();
-  } else {
-    stopNyanboxAdvertiser();
-  }
-
+  // Assign menu pointers BEFORE any getVisibleMenuItem() calls
   switch (st) {
     case APP_MAIN:
       currentMenuItems = mainMenu;
       currentMenuSize  = MAIN_MENU_SIZE;
+      mainMenuColumn   = 0;
       break;
     case APP_WIFI:
       currentMenuItems = wifiMenu;
@@ -452,6 +429,17 @@ void enterMenu(AppMenuState st) {
       currentMenuItems = otherMenu;
       currentMenuSize  = OTHER_MENU_SIZE;
       break;
+    default:
+      break;
+  }
+
+  // Stop advertiser when leaving main. Restart when returning (after boot delay).
+  if (st == APP_MAIN) {
+    if (!advertiserBootPending) {
+      startNyanboxAdvertiser();
+    }
+  } else {
+    stopNyanboxAdvertiser();
   }
 
   item_selected = 0;
@@ -480,14 +468,12 @@ void runApp(MenuItem &mi) {
 
   mi.setup();
   updateLastActivity();
-  displayOff = false;
   u8g2.setPowerSave(0);
 
   if (!mi.loop) return;
   while (digitalRead(BUTTON_SEL) == LOW);
 
   while (true) {
-    checkIdle();
     updateAppXP();
     neopixelLoop();
 
@@ -515,6 +501,13 @@ void runApp(MenuItem &mi) {
 void setup() {
   Serial.begin(115200);
 
+  // Buttons first so password / menus never run without pins ready
+  pinMode(BUTTON_PIN_UP, INPUT_PULLUP);
+  pinMode(BUTTON_PIN_CENTER, INPUT_PULLUP);
+  pinMode(BUTTON_PIN_DOWN, INPUT_PULLUP);
+  pinMode(BUTTON_PIN_RIGHT, INPUT_PULLUP);
+  pinMode(BUTTON_PIN_LEFT, INPUT_PULLUP);
+
   neopixelSetup();
 
   // Unified single-module NRF24 bring-up
@@ -522,10 +515,9 @@ void setup() {
 
   EEPROM.begin(512);
   oledBrightness = EEPROM.read(1);
+  if (oledBrightness == 0xFF) oledBrightness = 128;
 
   dangerousActionsEnabled = true;  // permanently enabled
-
-  loadSleepTimeoutFromEEPROM();
 
   uint8_t continuousScanValue = EEPROM.read(4);
   if (continuousScanValue == 0xFF) {
@@ -547,16 +539,9 @@ void setup() {
 
   updateLastActivity();
 
-  // ========== Opening Scene 1: RG logo + Richard Gladson ==========
+  // ========== Opening Scene 1: RG logo (no name text) ==========
   u8g2.clearBuffer();
-  u8g2.drawBitmap(0, 0, 16, 64, logo_doombox);  // RG logo
-  u8g2.setFont(u8g2_font_helvR08_tr);
-  {
-    const char* name = "Richard Gladson";
-    int16_t nw = u8g2.getUTF8Width(name);
-    u8g2.setCursor((128 - nw) / 2, 62);
-    u8g2.print(name);
-  }
+  u8g2.drawBitmap(0, 0, 16, 64, logo_doombox);  // RG logo only
   u8g2.sendBuffer();
   delay(2000);
 
@@ -572,64 +557,26 @@ void setup() {
   u8g2.sendBuffer();
   delay(1500);
 
-  // ========== Opening Scene 3: doomBOX logo bitmap ==========
+  // ========== Opening Scene 3: new doomBOX logo bitmap ==========
   u8g2.clearBuffer();
   u8g2.drawBitmap(0, 0, 16, 64, doombox_bitmap);
   u8g2.sendBuffer();
   delay(2000);
 
-  // ========== Opening Scene 4: description ==========
-  u8g2.clearBuffer();
-  u8g2.setFont(u8g2_font_5x8_tr);
-
-  const char* url1 = "github.com/";
-  int16_t url1W = u8g2.getUTF8Width(url1);
-  u8g2.setCursor((128 - url1W) / 2, 16);
-  u8g2.print(url1);
-
-  const char* url2 = "richardgladson/doomBOX";
-  int16_t url2W = u8g2.getUTF8Width(url2);
-  u8g2.setCursor((128 - url2W) / 2, 26);
-  u8g2.print(url2);
-
-  const char* credit1 = "made by richard gladson";
-  int16_t c1W = u8g2.getUTF8Width(credit1);
-  u8g2.setCursor((128 - c1W) / 2, 38);
-  u8g2.print(credit1);
-
-  const char* credit2 = "inspired by nyanBOX";
-  int16_t c2W = u8g2.getUTF8Width(credit2);
-  u8g2.setCursor((128 - c2W) / 2, 48);
-  u8g2.print(credit2);
-
-  const char* tag1 = "wireless penetration";
-  int16_t t1W = u8g2.getUTF8Width(tag1);
-  u8g2.setCursor((128 - t1W) / 2, 56);
-  u8g2.print(tag1);
-
-  const char* tag2 = "testing tool";
-  int16_t t2W = u8g2.getUTF8Width(tag2);
-  u8g2.setCursor((128 - t2W) / 2, 63);
-  u8g2.print(tag2);
-
-  u8g2.sendBuffer();
-  delay(2500);
-
-  pinMode(BUTTON_PIN_UP, INPUT_PULLUP);
-  pinMode(BUTTON_PIN_CENTER, INPUT_PULLUP);
-  pinMode(BUTTON_PIN_DOWN, INPUT_PULLUP);
-  pinMode(BUTTON_PIN_RIGHT, INPUT_PULLUP);
-  pinMode(BUTTON_PIN_LEFT, INPUT_PULLUP);
+  // (GitHub / credits screen removed – go straight to device)
 
   levelSystemSetup();
 
+  // Defer BLE advertising until after the main menu is up.
+  // Starting BLE immediately after the cutscene was a common cause of
+  // boot loops (crash → reboot → cutscene again).
   initNyanboxAdvertiser();
-  startNyanboxAdvertiser();
 
   if (passwordEnabled()) { checkPasswordOnBoot(); }
 
   enterMenu(APP_MAIN);
   displayMirrorSetup();
+  // BLE advertiser starts later from loop via updateNyanboxAdvertiser()
 }
 
 void loop() {
@@ -644,14 +591,14 @@ void loop() {
     }
   }
 
-  checkIdle();
-
-  if (displayOff) {
-    return;
-  }
-
   updateAppXP();
   neopixelLoop();
+
+  // Defer BLE advertiser until UI has been running a moment (avoids boot-loop crashes)
+  if (advertiserBootPending && millis() > 8000) {
+    advertiserBootPending = false;
+    startNyanboxAdvertiser();
+  }
   updateNyanboxAdvertiser();
 
   bool upNow = (digitalRead(BUTTON_PIN_UP) == LOW);
@@ -711,9 +658,16 @@ void loop() {
     if (currentState != APP_LEVEL) {
       MenuItem *sel = getVisibleMenuItem(item_selected);
       if (currentState == APP_MAIN) {
-        if (strcmp(sel->name, "WiFi") == 0) enterMenu(APP_WIFI);
-        else if (strcmp(sel->name, "BLE") == 0) enterMenu(APP_BLE);
-        else if (strcmp(sel->name, "Other") == 0) enterMenu(APP_OTHER);
+        if (mainMenuColumn == 0) {
+          // Category column
+          if (strcmp(sel->name, "WiFi") == 0) enterMenu(APP_WIFI);
+          else if (strcmp(sel->name, "BLE") == 0) enterMenu(APP_BLE);
+          else if (strcmp(sel->name, "Other") == 0) enterMenu(APP_OTHER);
+        } else {
+          // Shortcut column – launch the real function
+          runApp(*sel);
+          needsRedraw = true;
+        }
       } else {
         if (strcmp(sel->name, "Back") == 0) {
           enterMenu(APP_MAIN);
@@ -727,10 +681,16 @@ void loop() {
 
   if (justPressed(BUTTON_LEFT, leftPrev, leftDebounceTime)) {
     updateLastActivity();
-    if (currentState == APP_LEVEL ||
-        currentState == APP_BLE   ||
-        currentState == APP_WIFI  ||
-        currentState == APP_OTHER) {
+    if (currentState == APP_MAIN) {
+      if (mainMenuColumn == 1) {
+        mainMenuColumn = 0;
+        item_selected = 0;
+        needsRedraw = true;
+      }
+    } else if (currentState == APP_LEVEL ||
+               currentState == APP_BLE   ||
+               currentState == APP_WIFI  ||
+               currentState == APP_OTHER) {
       enterMenu(APP_MAIN);
     }
   }
@@ -738,9 +698,16 @@ void loop() {
   if (justPressed(BUTTON_RIGHT, rightPrev, rightDebounceTime)) {
     updateLastActivity();
     if (currentState == APP_MAIN) {
-      currentState = APP_LEVEL;
-      levelSystemSetup();
-      needsRedraw = true;
+      if (mainMenuColumn == 0) {
+        mainMenuColumn = 1;
+        item_selected = 0;
+        needsRedraw = true;
+      } else {
+        // Already on shortcut column → open Level menu
+        currentState = APP_LEVEL;
+        levelSystemSetup();
+        needsRedraw = true;
+      }
     }
   }
 
@@ -754,38 +721,78 @@ void loop() {
     if (needsRedraw) {
       u8g2.clearBuffer();
 
-      int start;
-      if (item_selected == 0) start = 0;
-      else if (item_selected == getVisibleMenuSize() - 1) start = max(0, getVisibleMenuSize() - 3);
-      else start = item_selected - 1;
+      if (currentState == APP_MAIN) {
+        // ===== Dual-column main menu (clean) =====
+        // Left: WiFi / BLE / Other
+        // Right: WiFi Scan / BT SigKill / AirTag
 
-      int highlight = item_selected - start;
+        const int leftX = 2;
+        const int rightX = 66;
 
-      int selectionY = 6 + (highlight * (ITEM_HEIGHT + ITEM_SPACING));
-      drawSelection(SELECTION_X, selectionY, SELECTION_WIDTH, ITEM_HEIGHT, true);
-
-      for (int i = 0; i < 3; i++) {
-        int idx = start + i;
-        if (idx < getVisibleMenuSize()) {
-          MenuItem *item = getVisibleMenuItem(idx);
+        // Draw left column items
+        for (int i = 0; i < MAIN_MENU_SIZE; i++) {
           int itemY = 6 + (i * (ITEM_HEIGHT + ITEM_SPACING));
           int textY = itemY + 11;
+          bool focused = (mainMenuColumn == 0 && item_selected == i);
 
+          if (focused) {
+            u8g2.drawBox(leftX, itemY + 2, 2, ITEM_HEIGHT - 4);
+          }
+
+          if (mainMenu[i].icon) {
+            u8g2.drawXBMP(leftX + 4, itemY, 16, 16, mainMenu[i].icon);
+          }
           u8g2.setFont(u8g2_font_helvR08_tr);
-          u8g2.drawStr(TEXT_X, textY, item->name);
+          u8g2.drawStr(leftX + 22, textY, mainMenu[i].name);
+        }
 
-          if (item->icon) {
-            int iconY = itemY;
-            u8g2.drawXBMP(ICON_X, iconY, 16, 16, item->icon);
+        // Draw right (shortcut) column items
+        for (int i = 0; i < SHORTCUT_MENU_SIZE; i++) {
+          if (!shouldShowApp(shortcutMenu[i].name)) continue;
+          int itemY = 6 + (i * (ITEM_HEIGHT + ITEM_SPACING));
+          int textY = itemY + 11;
+          bool focused = (mainMenuColumn == 1 && item_selected == i);
+
+          if (focused) {
+            u8g2.drawBox(rightX, itemY + 2, 2, ITEM_HEIGHT - 4);
+          }
+
+          if (shortcutMenu[i].icon) {
+            u8g2.drawXBMP(rightX + 4, itemY, 16, 16, shortcutMenu[i].icon);
+          }
+          u8g2.setFont(u8g2_font_5x8_tr);
+          const char* label = shortcutMenu[i].name;
+          if (strcmp(label, "BT SigKill") == 0) label = "BT Kill";
+          u8g2.drawStr(rightX + 22, textY, label);
+        }
+      } else {
+        // ===== Standard single-column submenu =====
+        int start;
+        if (item_selected == 0) start = 0;
+        else if (item_selected == getVisibleMenuSize() - 1) start = max(0, getVisibleMenuSize() - 3);
+        else start = item_selected - 1;
+
+        int highlight = item_selected - start;
+
+        int selectionY = 6 + (highlight * (ITEM_HEIGHT + ITEM_SPACING));
+        drawSelection(SELECTION_X, selectionY, SELECTION_WIDTH, ITEM_HEIGHT, true);
+
+        for (int i = 0; i < 3; i++) {
+          int idx = start + i;
+          if (idx < getVisibleMenuSize()) {
+            MenuItem *item = getVisibleMenuItem(idx);
+            int itemY = 6 + (i * (ITEM_HEIGHT + ITEM_SPACING));
+            int textY = itemY + 11;
+
+            u8g2.setFont(u8g2_font_helvR08_tr);
+            u8g2.drawStr(TEXT_X, textY, item->name);
+
+            if (item->icon) {
+              int iconY = itemY;
+              u8g2.drawXBMP(ICON_X, iconY, 16, 16, item->icon);
+            }
           }
         }
-      }
-
-      if (currentState == APP_MAIN) {
-        u8g2.setFont(u8g2_font_5x8_tr);
-        const char* rightHint = "Level Menu ->";
-        int rightHintWidth = u8g2.getUTF8Width(rightHint);
-        u8g2.drawStr(128 - rightHintWidth, 64, rightHint);
       }
 
       u8g2.sendBuffer();

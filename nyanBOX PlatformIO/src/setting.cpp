@@ -25,19 +25,17 @@ extern U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2;
 
 #define EEPROM_ADDRESS_NEOPIXEL 0
 #define EEPROM_ADDRESS_BRIGHTNESS 1
-#define EEPROM_ADDRESS_SLEEP_TIMEOUT 3
 #define EEPROM_ADDRESS_CONTINUOUS_SCAN 4
 #define EEPROM_ADDRESS_PRIVACY_MODE 5
 
 int currentSetting = 0;
-int totalSettings = 7;
+int totalSettings = 6;  // Sleep option removed
 bool neoPixelActive = true;
 uint8_t oledBrightness = 100;
 extern bool dangerousActionsEnabled;
 bool continuousScanEnabled = true;
 bool privacyModeEnabled = false;
 bool showResetConfirm = false;
-uint8_t sleepTimeoutIndex = 3;
 
 static bool needsRedraw = true;
 static int lastCurrentSetting = -1;
@@ -47,14 +45,6 @@ static bool lastDangerousActionsEnabled = false;
 static bool lastContinuousScanEnabled = true;
 static bool lastPrivacyModeEnabled = false;
 static bool lastShowResetConfirm = false;
-static uint8_t lastSleepTimeoutIndex = 3;
-
-const unsigned long sleepTimeouts[] = {15, 30, 60, 120, 300, 900, 1800, 0};
-const char* sleepTimeoutNames[] = {"15s", "30s", "1m", "2m", "5m", "15m", "30m", "Off"};
-const int sleepTimeoutCount = 8;
-
-extern unsigned long idleTimeout;
-extern void updateSleepTimeout(unsigned long newTimeout);
 
 void handleDangerousActions() {
   if (!dangerousActionsEnabled) {
@@ -70,7 +60,6 @@ void handleDangerousActions() {
 void settingSetup() {
   uint8_t neoPixelValue = EEPROM.read(EEPROM_ADDRESS_NEOPIXEL);
   uint8_t brightnessValue = EEPROM.read(EEPROM_ADDRESS_BRIGHTNESS);
-  uint8_t sleepTimeoutValue = EEPROM.read(EEPROM_ADDRESS_SLEEP_TIMEOUT);
   uint8_t continuousScanValue = EEPROM.read(EEPROM_ADDRESS_CONTINUOUS_SCAN);
   uint8_t privacyModeValue = EEPROM.read(EEPROM_ADDRESS_PRIVACY_MODE);
 
@@ -86,14 +75,6 @@ void settingSetup() {
     oledBrightness = 128;
   } else {
     oledBrightness = brightnessValue;
-  }
-
-  if (sleepTimeoutValue == 0xFF || sleepTimeoutValue >= sleepTimeoutCount) {
-    sleepTimeoutIndex = 3;
-    EEPROM.write(EEPROM_ADDRESS_SLEEP_TIMEOUT, sleepTimeoutIndex);
-    EEPROM.commit();
-  } else {
-    sleepTimeoutIndex = sleepTimeoutValue;
   }
 
   if (continuousScanValue == 0xFF) {
@@ -114,8 +95,6 @@ void settingSetup() {
 
   u8g2.setContrast(oledBrightness);
 
-  updateSleepTimeout(sleepTimeouts[sleepTimeoutIndex] * 1000);
-
   currentSetting = 0;
   showResetConfirm = false;
 
@@ -127,7 +106,6 @@ void settingSetup() {
   lastContinuousScanEnabled = continuousScanEnabled;
   lastPrivacyModeEnabled = privacyModeEnabled;
   lastShowResetConfirm = false;
-  lastSleepTimeoutIndex = sleepTimeoutIndex;
 }
 
 void settingLoop() {
@@ -207,28 +185,20 @@ void settingLoop() {
             break;
 
           case 2:
-            sleepTimeoutIndex = (sleepTimeoutIndex + 1) % sleepTimeoutCount;
-            EEPROM.write(EEPROM_ADDRESS_SLEEP_TIMEOUT, sleepTimeoutIndex);
-            EEPROM.commit();
-            updateSleepTimeout(sleepTimeouts[sleepTimeoutIndex] * 1000);
-            needsRedraw = true;
-            break;
-
-          case 3:
             continuousScanEnabled = !continuousScanEnabled;
             EEPROM.write(EEPROM_ADDRESS_CONTINUOUS_SCAN, continuousScanEnabled ? 1 : 0);
             EEPROM.commit();
             needsRedraw = true;
             break;
 
-          case 4:
+          case 3:
             privacyModeEnabled = !privacyModeEnabled;
             EEPROM.write(EEPROM_ADDRESS_PRIVACY_MODE, privacyModeEnabled ? 1 : 0);
             EEPROM.commit();
             needsRedraw = true;
             break;
 
-          case 5:
+          case 4:
             if (passwordEnabled()) {
               clearPassword();
               needsRedraw = true;
@@ -238,7 +208,7 @@ void settingLoop() {
             }
             break;
 
-          case 6:
+          case 5:
             showResetConfirm = true;
             needsRedraw = true;
             break;
@@ -280,10 +250,6 @@ void settingLoop() {
   }
   if (lastShowResetConfirm != showResetConfirm) {
     lastShowResetConfirm = showResetConfirm;
-    needsRedraw = true;
-  }
-  if (lastSleepTimeoutIndex != sleepTimeoutIndex) {
-    lastSleepTimeoutIndex = sleepTimeoutIndex;
     needsRedraw = true;
   }
   if (lastContinuousScanEnabled != continuousScanEnabled) {
@@ -340,22 +306,18 @@ void settingLoop() {
           u8g2.drawStr(85, yPos, brightStr);
           break;
         case 2:
-          u8g2.drawStr(10, yPos, "Sleep:");
-          u8g2.drawStr(85, yPos, sleepTimeoutNames[sleepTimeoutIndex]);
-          break;
-        case 3:
           u8g2.drawStr(10, yPos, "Fast Retry:");
           u8g2.drawStr(85, yPos, continuousScanEnabled ? "On" : "Off");
           break;
-        case 4:
+        case 3:
           u8g2.drawStr(10, yPos, "Privacy:");
           u8g2.drawStr(85, yPos, privacyModeEnabled ? "On" : "Off");
           break;
-        case 5:
+        case 4:
           u8g2.drawStr(10, yPos, "Password:");
           u8g2.drawStr(85, yPos, passwordEnabled() ? "On" : "Off");
           break;
-        case 6:
+        case 5:
           u8g2.drawStr(10, yPos, "Reset XP:");
           char lvlStr[8];
           sprintf(lvlStr, "Lv%d", getCurrentLevel());

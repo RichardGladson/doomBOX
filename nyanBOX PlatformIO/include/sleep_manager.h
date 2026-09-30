@@ -7,15 +7,18 @@
     https://opensource.org/licenses/MIT
 
     SPDX-License-Identifier: MIT
+
+    Sleep feature removed in doomBOX revamp 2.
+    Stubs retained so existing module includes still compile.
 */
 
 #ifndef SLEEP_MANAGER_H
 #define SLEEP_MANAGER_H
 
 extern void updateLastActivity();
-extern void checkIdle();
-extern void wakeDisplay();
+extern void checkIdle();          // no-op
+extern void wakeDisplay();        // no-op
 extern bool anyButtonPressed();
-extern void updateSleepTimeout(unsigned long newTimeout);
+extern void updateSleepTimeout(unsigned long newTimeout);  // no-op
 
 #endif
