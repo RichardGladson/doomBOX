@@ -28,9 +28,8 @@
 #include "../include/neopixel.h"
 #include "../include/setting.h"
 
-#include "../include/scanner.h"
-#include "../include/analyzer.h"
 #include "../include/sourapple.h"
+#include "../include/reaper_ui.h"
 #include "../include/sourdroid.h"
 #include "../include/blescan.h"
 #include "../include/ble_inspector.h"
@@ -234,7 +233,7 @@ bool shouldShowApp(const char* appName) {
 extern MenuItem mainMenu[];
 extern MenuItem shortcutMenu[];
 constexpr int MAIN_MENU_SIZE = 3;
-constexpr int SHORTCUT_MENU_SIZE = 1;
+constexpr int SHORTCUT_MENU_SIZE = 2;
 
 int getVisibleMenuSize() {
   if (currentState == APP_MAIN) {
@@ -337,9 +336,10 @@ MenuItem mainMenu[] = {
   { "Other", bitmap_icon_analyzer, nullptr, nullptr, noCleanup }
 };
 
-// Second column on main menu – RFID module
+// Second column on main menu – RFID + Reaper link
 MenuItem shortcutMenu[] = {
-  { "RFID",  bitmap_icon_rfid, rfidSetup, rfidLoop, rfidCleanup }
+  { "RFID",   bitmap_icon_rfid,  rfidSetup,     rfidLoop,     rfidCleanup },
+  { "Reaper", bitmap_icon_skull, reaperUiSetup, reaperUiLoop, reaperUiCleanup }
 };
 
 MenuItem wifiMenu[] = {
@@ -387,8 +387,7 @@ MenuItem otherMenu[] = {
   { "Drone Spoofer", nullptr, droneSpooferSetup, droneSpooferLoop, cleanupDroneSpoofer },
   { "Flock Detector", nullptr, flockDetectorSetup, flockDetectorLoop, cleanupFlockDetector },
   { "Device Scout", nullptr, deviceScoutSetup, deviceScoutLoop, cleanupDeviceScout },
-  { "Scanner",      nullptr, scannerSetup,    scannerLoop,    cleanupRadio },
-  { "Analyzer",     nullptr, analyzerSetup,   analyzerLoop,   cleanupRadio },
+  // Scanner & Analyzer offloaded to ESP32-Reaper via ESP-NOW (see Reaper menu)
   { "Setting",      nullptr, settingSetup,    settingLoop,    noCleanup },
   { "About",        nullptr, aboutSetup,      aboutLoop,      aboutCleanup },
   { "Back",         nullptr, nullptr,         nullptr,        noCleanup }

@@ -404,8 +404,15 @@ static bool readCardBasic(CardDump& out) {
   out.atqa = 0;
 
   MFRC522::PICC_Type t = mfrc522.PICC_GetType(out.sak);
-  const char* name = mfrc522.PICC_GetTypeName(t);
-  strncpy(out.typeName, name ? name : "Unknown", sizeof(out.typeName) - 1);
+  // PICC_GetTypeName returns const __FlashStringHelper* (PROGMEM) on MFRC522
+  const __FlashStringHelper* fname = mfrc522.PICC_GetTypeName(t);
+  if (fname) {
+    strncpy_P(out.typeName, (PGM_P)fname, sizeof(out.typeName) - 1);
+    out.typeName[sizeof(out.typeName) - 1] = '\0';
+  } else {
+    strncpy(out.typeName, "Unknown", sizeof(out.typeName) - 1);
+    out.typeName[sizeof(out.typeName) - 1] = '\0';
+  }
 
   out.isClassic = (t == MFRC522::PICC_TYPE_MIFARE_MINI ||
                    t == MFRC522::PICC_TYPE_MIFARE_1K ||
