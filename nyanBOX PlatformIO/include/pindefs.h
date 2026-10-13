@@ -16,9 +16,9 @@
 // Button Pin Definitions
 #define BUTTON_PIN_UP      26
 #define BUTTON_PIN_DOWN    33
-#define BUTTON_PIN_CENTER  32  // Select = Start / Confirm / OK
-#define BUTTON_PIN_LEFT    25  // Back (previous menu); exits app at root
-#define BUTTON_PIN_RIGHT   27  // Rescan
+#define BUTTON_PIN_CENTER  32  // Exit
+#define BUTTON_PIN_LEFT    25  // Back
+#define BUTTON_PIN_RIGHT   27  // Select
 
 // Radio Pins (single NRF24 module)
 #define RADIO_CE_PIN_1      5
@@ -26,5 +26,9 @@
 
 // NeoPixel
 #define NEOPIXEL_PIN       14
+
+// RC522 RFID (shared SPI bus: SCK=18, MISO=19, MOSI=23)
+#define RFID_SS_PIN        21
+#define RFID_RST_PIN       22
 
 #endif // PINDEFS_H

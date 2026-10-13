@@ -72,6 +72,7 @@
 #include "../include/password.h"
 #include "../include/radio_manager.h"
 #include "../include/superscanner.h"
+#include "../include/rfid.h"
 
 RF24 radios[] = {
   RF24(RADIO_CE_PIN_1, RADIO_CSN_PIN_1)
@@ -197,6 +198,7 @@ AppMenuState currentState = APP_MAIN;
 MenuItem*    currentMenuItems = nullptr;
 int          currentMenuSize  = 0;
 int          item_selected    = 0;
+int          mainMenuColumn   = 0;  // 0 = categories (WiFi/BLE/Other), 1 = shortcuts (RFID)
 
 constexpr uint8_t BUTTON_UP    = BUTTON_PIN_UP;
 constexpr uint8_t BUTTON_SEL   = BUTTON_PIN_CENTER;
@@ -230,10 +232,19 @@ bool shouldShowApp(const char* appName) {
 
 // Forward declarations – defined later with the rest of the menus
 extern MenuItem mainMenu[];
+extern MenuItem shortcutMenu[];
 constexpr int MAIN_MENU_SIZE = 3;
+constexpr int SHORTCUT_MENU_SIZE = 1;
 
 int getVisibleMenuSize() {
   if (currentState == APP_MAIN) {
+    if (mainMenuColumn == 1) {
+      int count = 0;
+      for (int i = 0; i < SHORTCUT_MENU_SIZE; i++) {
+        if (shouldShowApp(shortcutMenu[i].name)) count++;
+      }
+      return count;
+    }
     return MAIN_MENU_SIZE;
   }
 
@@ -247,6 +258,19 @@ int getVisibleMenuSize() {
 }
 
 MenuItem* getVisibleMenuItem(int visibleIndex) {
+  if (currentState == APP_MAIN && mainMenuColumn == 1) {
+    int visibleCount = 0;
+    for (int i = 0; i < SHORTCUT_MENU_SIZE; i++) {
+      if (shouldShowApp(shortcutMenu[i].name)) {
+        if (visibleCount == visibleIndex) {
+          return &shortcutMenu[i];
+        }
+        visibleCount++;
+      }
+    }
+    return &shortcutMenu[0];
+  }
+
   int visibleCount = 0;
   for (int i = 0; i < currentMenuSize; i++) {
     if (shouldShowApp(currentMenuItems[i].name)) {
@@ -311,6 +335,11 @@ MenuItem mainMenu[] = {
   { "WiFi",  bitmap_icon_wifi,    nullptr, nullptr, noCleanup },
   { "BLE",   bitmap_icon_ble,     nullptr, nullptr, noCleanup },
   { "Other", bitmap_icon_analyzer, nullptr, nullptr, noCleanup }
+};
+
+// Second column on main menu – RFID module
+MenuItem shortcutMenu[] = {
+  { "RFID",  bitmap_icon_rfid, rfidSetup, rfidLoop, rfidCleanup }
 };
 
 MenuItem wifiMenu[] = {
@@ -382,6 +411,7 @@ void enterMenu(AppMenuState st) {
     case APP_MAIN:
       currentMenuItems = mainMenu;
       currentMenuSize  = MAIN_MENU_SIZE;
+      mainMenuColumn   = 0;
       break;
     case APP_WIFI:
       currentMenuItems = wifiMenu;
@@ -624,9 +654,15 @@ void loop() {
     if (currentState != APP_LEVEL) {
       MenuItem *sel = getVisibleMenuItem(item_selected);
       if (currentState == APP_MAIN) {
-        if (strcmp(sel->name, "WiFi") == 0) enterMenu(APP_WIFI);
-        else if (strcmp(sel->name, "BLE") == 0) enterMenu(APP_BLE);
-        else if (strcmp(sel->name, "Other") == 0) enterMenu(APP_OTHER);
+        if (mainMenuColumn == 0) {
+          if (strcmp(sel->name, "WiFi") == 0) enterMenu(APP_WIFI);
+          else if (strcmp(sel->name, "BLE") == 0) enterMenu(APP_BLE);
+          else if (strcmp(sel->name, "Other") == 0) enterMenu(APP_OTHER);
+        } else {
+          // Second column – launch RFID (or other shortcuts)
+          runApp(*sel);
+          needsRedraw = true;
+        }
       } else {
         if (strcmp(sel->name, "Back") == 0) {
           enterMenu(APP_MAIN);
@@ -640,10 +676,16 @@ void loop() {
 
   if (justPressed(BUTTON_LEFT, leftPrev, leftDebounceTime)) {
     updateLastActivity();
-    if (currentState == APP_LEVEL ||
-        currentState == APP_BLE   ||
-        currentState == APP_WIFI  ||
-        currentState == APP_OTHER) {
+    if (currentState == APP_MAIN) {
+      if (mainMenuColumn == 1) {
+        mainMenuColumn = 0;
+        item_selected = 0;
+        needsRedraw = true;
+      }
+    } else if (currentState == APP_LEVEL ||
+               currentState == APP_BLE   ||
+               currentState == APP_WIFI  ||
+               currentState == APP_OTHER) {
       enterMenu(APP_MAIN);
     }
   }
@@ -651,10 +693,16 @@ void loop() {
   if (justPressed(BUTTON_RIGHT, rightPrev, rightDebounceTime)) {
     updateLastActivity();
     if (currentState == APP_MAIN) {
-      // Open Level menu
-      currentState = APP_LEVEL;
-      levelSystemSetup();
-      needsRedraw = true;
+      if (mainMenuColumn == 0) {
+        mainMenuColumn = 1;
+        item_selected = 0;
+        needsRedraw = true;
+      } else {
+        // Already on second column → open Level menu
+        currentState = APP_LEVEL;
+        levelSystemSetup();
+        needsRedraw = true;
+      }
     }
   }
 
@@ -669,13 +717,18 @@ void loop() {
       u8g2.clearBuffer();
 
       if (currentState == APP_MAIN) {
-        // ===== Single-column main menu =====
-        const int leftX = 2;
+        // ===== Dual-column main menu =====
+        // Left: WiFi / BLE / Other
+        // Right: RFID
 
+        const int leftX = 2;
+        const int rightX = 66;
+
+        // Draw left column items
         for (int i = 0; i < MAIN_MENU_SIZE; i++) {
           int itemY = 6 + (i * (ITEM_HEIGHT + ITEM_SPACING));
           int textY = itemY + 11;
-          bool focused = (item_selected == i);
+          bool focused = (mainMenuColumn == 0 && item_selected == i);
 
           if (focused) {
             u8g2.drawBox(leftX, itemY + 2, 2, ITEM_HEIGHT - 4);
@@ -686,6 +739,24 @@ void loop() {
           }
           u8g2.setFont(u8g2_font_helvR08_tr);
           u8g2.drawStr(leftX + 22, textY, mainMenu[i].name);
+        }
+
+        // Draw right (shortcut) column items
+        for (int i = 0; i < SHORTCUT_MENU_SIZE; i++) {
+          if (!shouldShowApp(shortcutMenu[i].name)) continue;
+          int itemY = 6 + (i * (ITEM_HEIGHT + ITEM_SPACING));
+          int textY = itemY + 11;
+          bool focused = (mainMenuColumn == 1 && item_selected == i);
+
+          if (focused) {
+            u8g2.drawBox(rightX, itemY + 2, 2, ITEM_HEIGHT - 4);
+          }
+
+          if (shortcutMenu[i].icon) {
+            u8g2.drawXBMP(rightX + 4, itemY, 16, 16, shortcutMenu[i].icon);
+          }
+          u8g2.setFont(u8g2_font_helvR08_tr);
+          u8g2.drawStr(rightX + 22, textY, shortcutMenu[i].name);
         }
       } else {
         // ===== Standard single-column submenu =====
