@@ -178,8 +178,8 @@ bool showLegalDisclaimer() {
 
     u8g2.setFont(u8g2_font_4x6_tr);
     if (page < 3) {
-      int instrWidth = u8g2.getUTF8Width("DOWN=Next  LEFT=Exit");
-      u8g2.drawStr((128 - instrWidth) / 2, 64, "DOWN=Next  LEFT=Exit");
+      int instrWidth = u8g2.getUTF8Width("DOWN=Next  L=Back");
+      u8g2.drawStr((128 - instrWidth) / 2, 64, "DOWN=Next  L=Back");
     } else if (page == 3 && hasSeenAllPages) {
       int instrWidth = u8g2.getUTF8Width("UP=Back  RIGHT=Accept");
       u8g2.drawStr((128 - instrWidth) / 2, 64, "UP=Back  RIGHT=Accept");

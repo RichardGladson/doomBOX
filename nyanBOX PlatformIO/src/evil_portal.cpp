@@ -407,7 +407,7 @@ void updateScan() {
         }
 
         u8g2.setFont(u8g2_font_5x8_tr);
-        u8g2.drawStr(0, 60, "Press SEL to exit");
+        u8g2.drawStr(0, 60, "L=Back");
         u8g2.sendBuffer();
         displayMirrorSend(u8g2);
     }
@@ -487,7 +487,7 @@ void drawPortalMenu() {
     }
     
     u8g2.setFont(u8g2_font_5x8_tr);
-    u8g2.drawStr(0, 62, "U/D=NAV R=OK SEL=EXIT");
+    u8g2.drawStr(0, 62, "U/D=NAV SEL=OK LEFT=EXIT");
     u8g2.sendBuffer();
     displayMirrorSend(u8g2);
 }
@@ -522,7 +522,7 @@ void drawPortalStatus() {
     u8g2.drawStr(0, 46, statsStr);
 
     u8g2.setFont(u8g2_font_5x8_tr);
-    u8g2.drawStr(0, 62, "L=Stop SEL=EXIT");
+    u8g2.drawStr(0, 62, "L=Stop LEFT=EXIT");
     u8g2.sendBuffer();
     displayMirrorSend(u8g2);
 }
@@ -535,7 +535,7 @@ void drawCredentialsList() {
         u8g2.drawStr(0, 10, "No Credentials");
         u8g2.drawStr(0, 22, "Captured Yet");
         u8g2.setFont(u8g2_font_5x8_tr);
-        u8g2.drawStr(0, 62, "L=Back SEL=EXIT");
+        u8g2.drawStr(0, 62, "L=Back LEFT=EXIT");
     } else {
         const Credential& cred = capturedCreds[credIndex];
 
@@ -595,7 +595,7 @@ void drawCredentialsList() {
         u8g2.drawStr(0, 50, infoStr);
 
         u8g2.setFont(u8g2_font_5x8_tr);
-        u8g2.drawStr(0, 62, "U/D=Nav L=Back SEL=EXIT");
+        u8g2.drawStr(0, 62, "U/D=Nav L=Back LEFT=EXIT");
     }
     
     u8g2.sendBuffer();
@@ -628,6 +628,7 @@ void evilPortalSetup() {
     pinMode(BUTTON_PIN_UP, INPUT_PULLUP);
     pinMode(BUTTON_PIN_DOWN, INPUT_PULLUP);
     pinMode(BUTTON_PIN_RIGHT, INPUT_PULLUP);
+    pinMode(BUTTON_PIN_CENTER, INPUT_PULLUP);
     pinMode(BUTTON_PIN_LEFT, INPUT_PULLUP);
 
     esp_netif_init();
@@ -664,11 +665,12 @@ void evilPortalLoop() {
     unsigned long now = millis();
 
     static bool upPressed = false, downPressed = false;
-    static bool rightPressed = false, leftPressed = false;
+    static bool rightPressed = false, leftPressed = false, selectPressed = false;
     bool upNow = digitalRead(BUTTON_PIN_UP) == LOW;
     bool downNow = digitalRead(BUTTON_PIN_DOWN) == LOW;
     bool rightNow = digitalRead(BUTTON_PIN_RIGHT) == LOW;
     bool leftNow = digitalRead(BUTTON_PIN_LEFT) == LOW;
+    bool selectNow = digitalRead(BUTTON_PIN_CENTER) == LOW;
 
     if (lastState != currentState) {
         lastState = currentState;
@@ -681,16 +683,12 @@ void evilPortalLoop() {
         downPressed = downNow;
         rightPressed = rightNow;
         leftPressed = leftNow;
+        selectPressed = selectNow;
         return;
     }
 
     switch (currentState) {
         case PORTAL_MENU:
-            if (portal_scanCompleted && now - portal_lastScanTime > SCAN_INTERVAL) {
-                startScan();
-                return;
-            }
-
             if (lastMenuSelection != menuSelection) {
                 lastMenuSelection = menuSelection;
                 needsRedraw = true;
@@ -718,31 +716,16 @@ void evilPortalLoop() {
                 needsRedraw = true;
                 delay(200);
             }
-            if (leftNow && !leftPressed) {
-                switch (menuSelection) {
-                    case 1:
-                        currentTemplate = (currentTemplate - 1 + numTemplates) % numTemplates;
-                        needsRedraw = true;
-                        break;
-                    case 2:
-                        if (!scannedSSIDs.empty()) {
-                            currentSSIDIndex = (currentSSIDIndex - 1 + scannedSSIDs.size()) % scannedSSIDs.size();
-                            currentSSID = scannedSSIDs[currentSSIDIndex];
-                        } else {
-                            static int ssidIndexL = 0;
-                            ssidIndexL = (ssidIndexL - 1 + customSSIDCount) % customSSIDCount;
-                            currentSSID = String(customSSIDs[ssidIndexL]);
-                        }
-                        needsRedraw = true;
-                        break;
-                }
-                delay(200);
-            }
-            if (rightNow && !rightPressed) {
+            if (selectNow && !selectPressed) {
                 switch (menuSelection) {
                     case 0:
                         setupPortalAP();
                         currentState = PORTAL_RUNNING;
+                        needsRedraw = true;
+                        break;
+                    case 3:
+                        currentState = PORTAL_VIEW_CREDS;
+                        credIndex = 0;
                         needsRedraw = true;
                         break;
                     case 1:
@@ -760,14 +743,15 @@ void evilPortalLoop() {
                         }
                         needsRedraw = true;
                         break;
-                    case 3:
-                        currentState = PORTAL_VIEW_CREDS;
-                        credIndex = 0;
-                        needsRedraw = true;
-                        break;
                 }
                 delay(200);
             }
+            if (rightNow && !rightPressed) {
+                // RIGHT = rescan networks
+                startScan();
+                delay(200);
+            }
+            // LEFT at menu root → runApp exits
 
             if (needsRedraw) {
                 needsRedraw = false;
@@ -784,7 +768,8 @@ void evilPortalLoop() {
                 currentState = PORTAL_MENU;
                 menuEnterTime = millis();
                 needsRedraw = true;
-                delay(200);
+                while (digitalRead(BUTTON_PIN_LEFT) == LOW) delay(10);
+                delay(50);
             }
             portalDNS.processNextRequest();
             portalServer.handleClient();
@@ -851,6 +836,7 @@ void evilPortalLoop() {
     downPressed = downNow;
     rightPressed = rightNow;
     leftPressed = leftNow;
+    selectPressed = selectNow;
 }
 
 void cleanupEvilPortal() {

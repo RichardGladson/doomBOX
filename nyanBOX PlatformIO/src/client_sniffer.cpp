@@ -88,7 +88,7 @@ static void addClient(const uint8_t* mac, int8_t rssi = 0) {
   for (int i = 0; i < numClients; i++) {
     if (memcmp(clients[i].mac, mac, 6) == 0) {
       clients[i].lastSeen = millis();
-      if (rssi != 0) clients[i].rssi = rssi;
+      if (rssi != 0) clients[i].rssi = (int8_t)(((int)clients[i].rssi * 3 + (int)rssi) / 4);
       portEXIT_CRITICAL(&clientMux);
       return;
     }
@@ -236,7 +236,7 @@ static void drawScanning() {
   u8g2.drawStr(0, 12, "Client Sniffer");
   u8g2.drawStr(0, 32, "Scanning networks...");
   u8g2.setFont(u8g2_font_5x8_tr);
-  u8g2.drawStr(0, 62, "SEL=Exit");
+  u8g2.drawStr(0, 62, "L=Back");
   u8g2.sendBuffer();
   displayMirrorSend(u8g2);
 }
@@ -270,7 +270,7 @@ static void drawAPList() {
     u8g2.drawStr(0, 22 + i * 10, line);
   }
 
-  u8g2.drawStr(0, 62, "U/D=Move R=Sniff SEL=Exit");
+  u8g2.drawStr(0, 62, "U/D=Move SEL=Sniff R=Rescan");
   u8g2.sendBuffer();
   displayMirrorSend(u8g2);
 }
@@ -313,7 +313,7 @@ static void drawClientList() {
     portEXIT_CRITICAL(&clientMux);
   }
 
-  u8g2.drawStr(0, 62, "U/D=Scroll L=Back SEL=Exit");
+  u8g2.drawStr(0, 62, "U/D=Scroll L=Back");
   u8g2.sendBuffer();
   displayMirrorSend(u8g2);
 }
@@ -377,8 +377,8 @@ void clientSnifferLoop() {
           selectedIndex = (selectedIndex + 1) % numNetworks;
           needsRedraw = true;
           lastButtonPress = now;
-        } else if (right && numNetworks > 0) {
-          // Start sniffing selected AP
+        } else if (digitalRead(BUTTON_PIN_CENTER) == LOW && numNetworks > 0) {
+          // SELECT = start sniffing selected AP
           memcpy(targetBSSID, networks[selectedIndex].bssid, 6);
           targetChannel = networks[selectedIndex].channel;
           strncpy(targetSSID, networks[selectedIndex].ssid, 32);
@@ -387,7 +387,15 @@ void clientSnifferLoop() {
           currentState = STATE_SNIFFING;
           needsRedraw = true;
           lastButtonPress = now;
+        } else if (right) {
+          // RIGHT = rescan
+          currentState = STATE_SCANNING;
+          needsRedraw = true;
+          lastButtonPress = now;
+          drawScanning();
+          doAPScan();
         }
+        // LEFT at list root → runApp exits
         break;
 
       case STATE_SNIFFING:
@@ -404,6 +412,7 @@ void clientSnifferLoop() {
           currentState = STATE_SELECT_AP;
           needsRedraw = true;
           lastButtonPress = now;
+          while (digitalRead(BUTTON_PIN_LEFT) == LOW) delay(10);
         }
         break;
     }

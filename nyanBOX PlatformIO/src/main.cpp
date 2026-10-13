@@ -55,7 +55,6 @@
 #include "../include/pindefs.h"
 #include "../include/sigkill.h"
 #include "../include/about.h"
-#include "../include/channel_analyzer.h"
 #include "../include/pwnagotchi_spam.h"
 #include "../include/level_system.h"
 #include "../include/nyanbox_detector.h"
@@ -198,7 +197,6 @@ AppMenuState currentState = APP_MAIN;
 MenuItem*    currentMenuItems = nullptr;
 int          currentMenuSize  = 0;
 int          item_selected    = 0;
-int          mainMenuColumn   = 0;  // 0 = categories (WiFi/BLE/Other), 1 = shortcuts
 
 constexpr uint8_t BUTTON_UP    = BUTTON_PIN_UP;
 constexpr uint8_t BUTTON_SEL   = BUTTON_PIN_CENTER;
@@ -232,20 +230,10 @@ bool shouldShowApp(const char* appName) {
 
 // Forward declarations – defined later with the rest of the menus
 extern MenuItem mainMenu[];
-extern MenuItem shortcutMenu[];
 constexpr int MAIN_MENU_SIZE = 3;
-constexpr int SHORTCUT_MENU_SIZE = 3;
 
 int getVisibleMenuSize() {
-  // On main menu, size depends on which column is focused
   if (currentState == APP_MAIN) {
-    if (mainMenuColumn == 1) {
-      int count = 0;
-      for (int i = 0; i < SHORTCUT_MENU_SIZE; i++) {
-        if (shouldShowApp(shortcutMenu[i].name)) count++;
-      }
-      return count;
-    }
     return MAIN_MENU_SIZE;
   }
 
@@ -259,19 +247,6 @@ int getVisibleMenuSize() {
 }
 
 MenuItem* getVisibleMenuItem(int visibleIndex) {
-  if (currentState == APP_MAIN && mainMenuColumn == 1) {
-    int visibleCount = 0;
-    for (int i = 0; i < SHORTCUT_MENU_SIZE; i++) {
-      if (shouldShowApp(shortcutMenu[i].name)) {
-        if (visibleCount == visibleIndex) {
-          return &shortcutMenu[i];
-        }
-        visibleCount++;
-      }
-    }
-    return &shortcutMenu[0];
-  }
-
   int visibleCount = 0;
   for (int i = 0; i < currentMenuSize; i++) {
     if (shouldShowApp(currentMenuItems[i].name)) {
@@ -338,25 +313,17 @@ MenuItem mainMenu[] = {
   { "Other", bitmap_icon_analyzer, nullptr, nullptr, noCleanup }
 };
 
-// Shortcut column on main menu – full entry points (not mere redirects)
-MenuItem shortcutMenu[] = {
-  { "WiFi Scan",       bitmap_icon_wifi,  wifiscanSetup,         wifiscanLoop,         wifiscanCleanup },
-  { "BT SigKill",      bitmap_icon_kill,  sigkillBleSetup,       sigkillLoop,          cleanupRadio },
-  { "AirTag",          bitmap_icon_apple, airtagDetectorSetup,   airtagDetectorLoop,   cleanupBLE }
-};
-
 MenuItem wifiMenu[] = {
-  { "WiFi Scan",       nullptr, wifiscanSetup,           wifiscanLoop,           wifiscanCleanup },
+  { "Scanner",         nullptr, wifiscanSetup,           wifiscanLoop,           wifiscanCleanup },
+  { "Deauther",        nullptr, deauthSetup,             deauthLoop,             cleanupWiFi },
+  { "Handshake Capture", nullptr, handshakeCaptureSetup, handshakeCaptureLoop, cleanupWiFi },
   { "Client Sniffer",  nullptr, clientSnifferSetup,      clientSnifferLoop,      clientSnifferCleanup },
-  { "Channel Analyzer", nullptr, channelAnalyzerSetup,   channelAnalyzerLoop,    cleanupWiFi },
-  { "WiFi Deauther",   nullptr, deauthSetup,             deauthLoop,             cleanupWiFi },
   { "Deauth Scanner",  nullptr, deauthScannerSetup,      deauthScannerLoop,      cleanupWiFi },
   { "Beacon Spam",     nullptr, beaconSpamSetup,         beaconSpamLoop,         cleanupWiFi },
   { "Evil Portal",     nullptr, evilPortalSetup,         evilPortalLoop,         cleanupEvilPortal },
   { "Pineapple Detector", nullptr, pineappleDetectorSetup, pineappleDetectorLoop, cleanupWiFi },
   { "Pwnagotchi Detector", nullptr, pwnagotchiDetectorSetup, pwnagotchiDetectorLoop, cleanupWiFi },
   { "Pwnagotchi Spam", nullptr, pwnagotchiSpamSetup,     pwnagotchiSpamLoop,     cleanupWiFi },
-  { "Handshake Capture", nullptr, handshakeCaptureSetup, handshakeCaptureLoop, cleanupWiFi },
   { "Back",            nullptr, nullptr,                 nullptr,                noCleanup }
 };
 constexpr int WIFI_MENU_SIZE = sizeof(wifiMenu) / sizeof(wifiMenu[0]);
@@ -415,7 +382,6 @@ void enterMenu(AppMenuState st) {
     case APP_MAIN:
       currentMenuItems = mainMenu;
       currentMenuSize  = MAIN_MENU_SIZE;
-      mainMenuColumn   = 0;
       break;
     case APP_WIFI:
       currentMenuItems = wifiMenu;
@@ -658,16 +624,9 @@ void loop() {
     if (currentState != APP_LEVEL) {
       MenuItem *sel = getVisibleMenuItem(item_selected);
       if (currentState == APP_MAIN) {
-        if (mainMenuColumn == 0) {
-          // Category column
-          if (strcmp(sel->name, "WiFi") == 0) enterMenu(APP_WIFI);
-          else if (strcmp(sel->name, "BLE") == 0) enterMenu(APP_BLE);
-          else if (strcmp(sel->name, "Other") == 0) enterMenu(APP_OTHER);
-        } else {
-          // Shortcut column – launch the real function
-          runApp(*sel);
-          needsRedraw = true;
-        }
+        if (strcmp(sel->name, "WiFi") == 0) enterMenu(APP_WIFI);
+        else if (strcmp(sel->name, "BLE") == 0) enterMenu(APP_BLE);
+        else if (strcmp(sel->name, "Other") == 0) enterMenu(APP_OTHER);
       } else {
         if (strcmp(sel->name, "Back") == 0) {
           enterMenu(APP_MAIN);
@@ -681,16 +640,10 @@ void loop() {
 
   if (justPressed(BUTTON_LEFT, leftPrev, leftDebounceTime)) {
     updateLastActivity();
-    if (currentState == APP_MAIN) {
-      if (mainMenuColumn == 1) {
-        mainMenuColumn = 0;
-        item_selected = 0;
-        needsRedraw = true;
-      }
-    } else if (currentState == APP_LEVEL ||
-               currentState == APP_BLE   ||
-               currentState == APP_WIFI  ||
-               currentState == APP_OTHER) {
+    if (currentState == APP_LEVEL ||
+        currentState == APP_BLE   ||
+        currentState == APP_WIFI  ||
+        currentState == APP_OTHER) {
       enterMenu(APP_MAIN);
     }
   }
@@ -698,16 +651,10 @@ void loop() {
   if (justPressed(BUTTON_RIGHT, rightPrev, rightDebounceTime)) {
     updateLastActivity();
     if (currentState == APP_MAIN) {
-      if (mainMenuColumn == 0) {
-        mainMenuColumn = 1;
-        item_selected = 0;
-        needsRedraw = true;
-      } else {
-        // Already on shortcut column → open Level menu
-        currentState = APP_LEVEL;
-        levelSystemSetup();
-        needsRedraw = true;
-      }
+      // Open Level menu
+      currentState = APP_LEVEL;
+      levelSystemSetup();
+      needsRedraw = true;
     }
   }
 
@@ -722,18 +669,13 @@ void loop() {
       u8g2.clearBuffer();
 
       if (currentState == APP_MAIN) {
-        // ===== Dual-column main menu (clean) =====
-        // Left: WiFi / BLE / Other
-        // Right: WiFi Scan / BT SigKill / AirTag
-
+        // ===== Single-column main menu =====
         const int leftX = 2;
-        const int rightX = 66;
 
-        // Draw left column items
         for (int i = 0; i < MAIN_MENU_SIZE; i++) {
           int itemY = 6 + (i * (ITEM_HEIGHT + ITEM_SPACING));
           int textY = itemY + 11;
-          bool focused = (mainMenuColumn == 0 && item_selected == i);
+          bool focused = (item_selected == i);
 
           if (focused) {
             u8g2.drawBox(leftX, itemY + 2, 2, ITEM_HEIGHT - 4);
@@ -744,26 +686,6 @@ void loop() {
           }
           u8g2.setFont(u8g2_font_helvR08_tr);
           u8g2.drawStr(leftX + 22, textY, mainMenu[i].name);
-        }
-
-        // Draw right (shortcut) column items
-        for (int i = 0; i < SHORTCUT_MENU_SIZE; i++) {
-          if (!shouldShowApp(shortcutMenu[i].name)) continue;
-          int itemY = 6 + (i * (ITEM_HEIGHT + ITEM_SPACING));
-          int textY = itemY + 11;
-          bool focused = (mainMenuColumn == 1 && item_selected == i);
-
-          if (focused) {
-            u8g2.drawBox(rightX, itemY + 2, 2, ITEM_HEIGHT - 4);
-          }
-
-          if (shortcutMenu[i].icon) {
-            u8g2.drawXBMP(rightX + 4, itemY, 16, 16, shortcutMenu[i].icon);
-          }
-          u8g2.setFont(u8g2_font_5x8_tr);
-          const char* label = shortcutMenu[i].name;
-          if (strcmp(label, "BT SigKill") == 0) label = "BT Kill";
-          u8g2.drawStr(rightX + 22, textY, label);
         }
       } else {
         // ===== Standard single-column submenu =====

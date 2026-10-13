@@ -530,7 +530,7 @@ static DroneData* findOrCreateDrone(const uint8_t *mac, int8_t rssi, const char 
 
     for (auto &d : drones) {
         if (strcmp(d.mac, mac_str) == 0) {
-            d.rssi = rssi;
+            d.rssi = (int8_t)(((int)d.rssi * 3 + (int)rssi) / 4);
             d.lastSeen = millis();
             if (strstr(d.detectionMethod, method) == nullptr) {
                 if (strlen(d.detectionMethod) > 0 && strcmp(d.detectionMethod, method) != 0) {
@@ -825,7 +825,7 @@ static void drawList() {
         }
 
         u8g2.setFont(u8g2_font_5x8_tr);
-        u8g2.drawStr(0, 62, "Press SEL to exit");
+        u8g2.drawStr(0, 62, "L=Back");
 
         u8g2.sendBuffer();
         displayMirrorSend(u8g2);
@@ -849,7 +849,7 @@ static void drawList() {
             u8g2.drawFrame(barX, barY, barWidth, barHeight);
 
             u8g2.setFont(u8g2_font_5x8_tr);
-            u8g2.drawStr(0, 62, "Press SEL to exit");
+            u8g2.drawStr(0, 62, "L=Back");
         } else {
             u8g2.setFont(u8g2_font_6x10_tr);
             u8g2.drawStr(0, 10, "No drones detected");
@@ -859,7 +859,7 @@ static void drawList() {
             unsigned long timeLeft = (SCAN_INTERVAL - (now - lastScanTime)) / 1000;
             snprintf(timeStr, sizeof(timeStr), "Scanning in %lus", timeLeft);
             u8g2.drawStr(0, 30, timeStr);
-            u8g2.drawStr(0, 45, "Press SEL to exit");
+            u8g2.drawStr(0, 45, "L=Back");
         }
         u8g2.sendBuffer();
         displayMirrorSend(u8g2);
@@ -1117,7 +1117,7 @@ static void drawLocate() {
         }
     }
 
-    u8g2.drawStr(0, 62, "L=Back SEL=Exit");
+    u8g2.drawStr(0, 62, "L=Back");
     u8g2.sendBuffer();
     displayMirrorSend(u8g2);
 }
@@ -1214,7 +1214,7 @@ void droneDetectorLoop() {
                     }
 
                     u8g2.setFont(u8g2_font_5x8_tr);
-                    u8g2.drawStr(0, 62, "Press SEL to exit");
+                    u8g2.drawStr(0, 62, "L=Back");
 
                     u8g2.sendBuffer();
                     displayMirrorSend(u8g2);
@@ -1267,7 +1267,7 @@ void droneDetectorLoop() {
                     }
 
                     u8g2.setFont(u8g2_font_5x8_tr);
-                    u8g2.drawStr(0, 62, "Press SEL to exit");
+                    u8g2.drawStr(0, 62, "L=Back");
 
                     u8g2.sendBuffer();
                     displayMirrorSend(u8g2);
@@ -1328,7 +1328,7 @@ void droneDetectorLoop() {
                 ++listStartIndex;
             lastButtonPress = now;
             needsRedraw = true;
-        } else if (!isDetailView && !isLocateMode && digitalRead(BTN_RIGHT) == LOW &&
+        } else if (!isDetailView && !isLocateMode && digitalRead(BTN_CENTER) == LOW &&
                    ! drones.empty()) {
             isDetailView = true;
             detailPage = 0;
@@ -1351,7 +1351,7 @@ void droneDetectorLoop() {
             }
             lastButtonPress = now;
             needsRedraw = true;
-        } else if (isDetailView && ! isLocateMode && digitalRead(BTN_RIGHT) == LOW &&
+        } else if (isDetailView && ! isLocateMode && digitalRead(BTN_CENTER) == LOW &&
                    !drones.empty()) {
             isLocateMode = true;
             strncpy(locateTargetMac, drones[currentIndex]. mac, sizeof(locateTargetMac) - 1);
@@ -1402,6 +1402,7 @@ void droneDetectorLoop() {
             detailPage = 0;
             lastButtonPress = now;
             needsRedraw = true;
+            while (digitalRead(BTN_BACK) == LOW) delay(10);
         }
     }
 

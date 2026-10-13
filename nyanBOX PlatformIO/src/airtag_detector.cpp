@@ -113,7 +113,7 @@ static void process_scan_result(esp_ble_gap_cb_param_t *scan_result) {
 
     for (size_t i = 0; i < airtagDevices.size(); i++) {
         if (strcmp(airtagDevices[i].address, addrStr) == 0) {
-            airtagDevices[i].rssi = scan_result->scan_rst.rssi;
+            airtagDevices[i].rssi = (int8_t)(((int)airtagDevices[i].rssi * 3 + (int)scan_result->scan_rst.rssi) / 4);
             airtagDevices[i].lastSeen = millis();
 
             if (payload_len > 0 && payload_len < 64) {
@@ -238,7 +238,7 @@ void airtagDetectorSetup() {
     snprintf(countStr, sizeof(countStr), "%d/%d devices", 0, MAX_DEVICES);
     u8g2.drawStr(0, 35, countStr);
     u8g2.setFont(u8g2_font_5x8_tr);
-    u8g2.drawStr(0, 60, "Press SEL to exit");
+    u8g2.drawStr(0, 60, "L=Back");
     u8g2.sendBuffer();
     displayMirrorSend(u8g2);
 
@@ -288,7 +288,7 @@ void airtagDetectorLoop() {
             }
 
             u8g2.setFont(u8g2_font_5x8_tr);
-            u8g2.drawStr(0, 62, "Press SEL to exit");
+            u8g2.drawStr(0, 62, "L=Back");
 
             u8g2.sendBuffer();
             displayMirrorSend(u8g2);
@@ -351,7 +351,7 @@ void airtagDetectorLoop() {
                 ++listStartIndex;
             lastButtonPress = now;
             needsRedraw = true;
-        } else if (!isDetailView && !isLocateMode && digitalRead(BTN_RIGHT) == LOW &&
+        } else if (!isDetailView && !isLocateMode && digitalRead(BTN_CENTER) == LOW &&
                    !airtagDevices.empty()) {
             isDetailView = true;
             if (isScanning) {
@@ -360,7 +360,7 @@ void airtagDetectorLoop() {
             }
             lastButtonPress = now;
             needsRedraw = true;
-        } else if (isDetailView && !isLocateMode && digitalRead(BTN_RIGHT) == LOW &&
+        } else if (isDetailView && !isLocateMode && digitalRead(BTN_CENTER) == LOW &&
                    !airtagDevices.empty()) {
             isLocateMode = true;
             strncpy(locateTargetAddress, airtagDevices[currentIndex].address, sizeof(locateTargetAddress) - 1);
@@ -381,6 +381,7 @@ void airtagDetectorLoop() {
             }
             lastButtonPress = now;
             needsRedraw = true;
+            while (digitalRead(BTN_BACK) == LOW) delay(10);
         } else if (isDetailView && !isLocateMode && digitalRead(BTN_BACK) == LOW) {
             isDetailView = false;
             if (isScanning) {
@@ -389,6 +390,7 @@ void airtagDetectorLoop() {
             }
             lastButtonPress = now;
             needsRedraw = true;
+            while (digitalRead(BTN_BACK) == LOW) delay(10);
         }
     }
 
@@ -447,7 +449,7 @@ void airtagDetectorLoop() {
             u8g2.drawFrame(barX, barY, barWidth, barHeight);
 
             u8g2.setFont(u8g2_font_5x8_tr);
-            u8g2.drawStr(0, 62, "Press SEL to exit");
+            u8g2.drawStr(0, 62, "L=Back");
         } else {
             u8g2.setFont(u8g2_font_6x10_tr);
             u8g2.drawStr(0, 10, "No AirTags found");
@@ -456,7 +458,7 @@ void airtagDetectorLoop() {
             unsigned long timeLeft = (scanInterval - (now - lastScanTime)) / 1000;
             snprintf(timeStr, sizeof(timeStr), "Scanning in %lus", timeLeft);
             u8g2.drawStr(0, 30, timeStr);
-            u8g2.drawStr(0, 45, "Press SEL to exit");
+            u8g2.drawStr(0, 45, "L=Back");
         }
     } else if (isLocateMode) {
         auto &dev = airtagDevices[currentIndex];
@@ -510,7 +512,7 @@ void airtagDetectorLoop() {
             }
         }
 
-        u8g2.drawStr(0, 62, "L=Back SEL=Exit");
+        u8g2.drawStr(0, 62, "L=Back");
     } else if (isDetailView && !airtagDevices.empty() && currentIndex >= 0 && currentIndex < (int)airtagDevices.size()) {
         auto &dev = airtagDevices[currentIndex];
         u8g2.setFont(u8g2_font_5x8_tr);
@@ -535,7 +537,7 @@ void airtagDetectorLoop() {
         snprintf(buf, sizeof(buf), "Age: %lus", (millis() - dev.lastSeen) / 1000);
         u8g2.drawStr(0, 50, buf);
 
-        u8g2.drawStr(0, 60, "L=Back SEL=Exit R=Locate");
+        u8g2.drawStr(0, 60, "L=Back SEL=Locate");
     } else {
         u8g2.setFont(u8g2_font_6x10_tr);
         char header[32];

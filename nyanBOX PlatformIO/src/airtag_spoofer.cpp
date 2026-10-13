@@ -71,7 +71,7 @@ void drawMainMenu() {
     u8g2.drawStr(0, 28, "No AirTags found!");
     u8g2.drawStr(0, 44, "Run Detector first");
     u8g2.setFont(u8g2_font_5x8_tr);
-    u8g2.drawStr(0, 62, "SEL=Exit");
+    u8g2.drawStr(0, 62, "L=Back");
   } else {
     const char* menuItems[] = {
       "Clone Target",
@@ -87,7 +87,7 @@ void drawMainMenu() {
     }
 
     u8g2.setFont(u8g2_font_5x8_tr);
-    u8g2.drawStr(0, 62, "U/D=NAV R=OK SEL=Exit");
+    u8g2.drawStr(0, 62, "U/D=NAV SEL=OK L=Back");
   }
 
   u8g2.sendBuffer();
@@ -117,7 +117,7 @@ void drawCloneSelect() {
   u8g2.drawStr(0, 44, addrInfo);
 
   u8g2.setFont(u8g2_font_5x8_tr);
-  u8g2.drawStr(0, 62, "U/D=Scroll R=Start L=Back SEL=Exit");
+  u8g2.drawStr(0, 62, "U/D=Scroll SEL=Start L=Back L=Back");
 
   u8g2.sendBuffer();
   displayMirrorSend(u8g2);
@@ -143,7 +143,7 @@ void drawCloneRunning() {
   u8g2.drawStr(0, 44, addrStr);
 
   u8g2.setFont(u8g2_font_5x8_tr);
-  u8g2.drawStr(0, 62, "L=Back SEL=Exit");
+  u8g2.drawStr(0, 62, "L=Back L=Back");
 
   u8g2.sendBuffer();
   displayMirrorSend(u8g2);
@@ -161,7 +161,7 @@ void drawCloneAllRunning() {
   u8g2.drawStr(0, 44, "Advertising...");
 
   u8g2.setFont(u8g2_font_5x8_tr);
-  u8g2.drawStr(0, 62, "L=Back SEL=Exit");
+  u8g2.drawStr(0, 62, "L=Back L=Back");
 
   u8g2.sendBuffer();
   displayMirrorSend(u8g2);
@@ -251,7 +251,7 @@ void airtagSpooferLoop() {
   static bool rightPressed = false, leftPressed = false;
   bool upNow = digitalRead(BTN_UP) == LOW;
   bool downNow = digitalRead(BTN_DOWN) == LOW;
-  bool rightNow = digitalRead(BTN_RIGHT) == LOW;
+  bool rightNow = digitalRead(BTN_CENTER) == LOW;
   bool leftNow = digitalRead(BTN_BACK) == LOW;
   bool centerNow = digitalRead(BTN_CENTER) == LOW;
 

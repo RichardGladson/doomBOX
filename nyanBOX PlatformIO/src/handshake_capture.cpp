@@ -105,7 +105,8 @@ static unsigned long lastDeauthTime = 0;
 static unsigned long captureStartTime = 0;
 static const unsigned long DEAUTH_FAST = 300;
 static const unsigned long DEAUTH_SLOW = 1500;
-static const unsigned long AUTO_STOP_MS = 60000;
+// AUTO_STOP removed - capture runs until user stops
+// static const unsigned long AUTO_STOP_MS = 60000;
 
 // Capture state (main loop owns most; callback only sets light flags)
 static volatile uint16_t eapolCount = 0;
@@ -948,6 +949,7 @@ void handshakeCaptureSetup() {
     pinMode(BTN_DOWN, INPUT_PULLUP);
     pinMode(BTN_BACK, INPUT_PULLUP);
     pinMode(BTN_RIGHT, INPUT_PULLUP);
+    pinMode(BUTTON_PIN_CENTER, INPUT_PULLUP);
 
     hsEepromInit();
 
@@ -955,7 +957,7 @@ void handshakeCaptureSetup() {
     menuSelection = 0;
     apIndex = 0;
     viewIndex = 0;
-    apCount = 0;
+    // Keep apList/apCount across re-entry; user rescans with LEFT on list or menu
     eapolCount = 0;
     hasPmkid = false;
     gotM1 = false;
@@ -1036,15 +1038,16 @@ void handshakeCaptureLoop() {
         needsRedraw = true;
     }
 
-    bool up    = digitalRead(BTN_UP)    == LOW;
-    bool down  = digitalRead(BTN_DOWN)  == LOW;
-    bool right = digitalRead(BTN_RIGHT) == LOW;
-    bool left  = digitalRead(BTN_BACK)  == LOW;
+    bool up     = digitalRead(BTN_UP)    == LOW;
+    bool down   = digitalRead(BTN_DOWN)  == LOW;
+    bool right  = digitalRead(BTN_RIGHT) == LOW;
+    bool left   = digitalRead(BTN_BACK)  == LOW;
+    bool select = digitalRead(BUTTON_PIN_CENTER) == LOW;
 
     switch (currentMode) {
     case HS_MODE_MENU:
         if (up || down) { menuSelection ^= 1; needsRedraw = true; delay(180); }
-        if (right) {
+        if (select) {
             if (menuSelection == 0) startScan();
             else {
                 currentMode = HS_MODE_VIEW_LIST;
@@ -1053,12 +1056,31 @@ void handshakeCaptureLoop() {
             }
             delay(180);
         }
+        if (right) {
+            // RIGHT = rescan
+            startScan();
+            delay(180);
+        }
+        // LEFT at root → runApp exits
         break;
 
     case HS_MODE_LIST:
         if (up && apCount)   { apIndex = (apIndex - 1 + apCount) % apCount; needsRedraw = true; delay(180); }
         if (down && apCount) { apIndex = (apIndex + 1) % apCount; needsRedraw = true; delay(180); }
-        if (right && apCount) {
+        if (right) {
+            // RIGHT = rescan
+            startScan();
+            delay(180);
+            break;
+        }
+        if (left) {
+            currentMode = HS_MODE_MENU;
+            needsRedraw = true;
+            while (digitalRead(BTN_BACK) == LOW) delay(10);
+            delay(50);
+            break;
+        }
+        if (select && apCount) {
             strncpy(targetSsid, apList[apIndex].ssid, sizeof(targetSsid) - 1);
             targetSsid[sizeof(targetSsid) - 1] = '\0';
             memcpy(targetBssid, apList[apIndex].bssid, 6);
@@ -1104,7 +1126,7 @@ void handshakeCaptureLoop() {
             needsRedraw = true;
             delay(180);
         }
-        if (left) { currentMode = HS_MODE_MENU; needsRedraw = true; delay(180); }
+        if (left) { currentMode = HS_MODE_MENU; needsRedraw = true; while (digitalRead(BTN_BACK) == LOW) delay(10); delay(50); }
         break;
 
     case HS_MODE_CAPTURE: {
@@ -1120,24 +1142,12 @@ void handshakeCaptureLoop() {
                 currentMode = HS_MODE_LIST;
             }
             needsRedraw = true;
-            delay(180);
+            while (digitalRead(BTN_BACK) == LOW) delay(10);
+            delay(50);
             break;
         }
 
-        if (now - captureStartTime > AUTO_STOP_MS) {
-            stopCaptureRadio();
-            processCandidates();
-            if (eapolCount > 0) {
-                hsSaveCurrentCapture();
-                serialDumpLiveCapture();
-                savedMsgUntil = now + 1800;
-                currentMode = HS_MODE_SAVED_MSG;
-            } else {
-                currentMode = HS_MODE_LIST;
-            }
-            needsRedraw = true;
-            break;
-        }
+        // No auto-stop: capture runs until user exits (LEFT)
 
         bool success = hasPmkid || (gotM1 && gotM2);
         if (success && !deauthStopped) {
@@ -1167,7 +1177,7 @@ void handshakeCaptureLoop() {
         uint8_t count = hsLoadCount();
         if (up && count) { viewIndex = (viewIndex - 1 + count) % count; needsRedraw = true; delay(180); }
         if (down && count) { viewIndex = (viewIndex + 1) % count; needsRedraw = true; delay(180); }
-        if (right && count) {
+        if (select && count) {
             currentMode = HS_MODE_VIEW_DETAIL;
             HandshakeEntry e;
             hsReadEntry(viewIndex, e);
@@ -1181,12 +1191,12 @@ void handshakeCaptureLoop() {
             needsRedraw = true;
             delay(400);
         }
-        if (left) { currentMode = HS_MODE_MENU; needsRedraw = true; delay(180); }
+        if (left) { currentMode = HS_MODE_MENU; needsRedraw = true; while (digitalRead(BTN_BACK) == LOW) delay(10); delay(50); }
         break;
     }
 
     case HS_MODE_VIEW_DETAIL:
-        if (left) { currentMode = HS_MODE_VIEW_LIST; needsRedraw = true; delay(180); }
+        if (left) { currentMode = HS_MODE_VIEW_LIST; needsRedraw = true; while (digitalRead(BTN_BACK) == LOW) delay(10); delay(50); }
         break;
 
     default:

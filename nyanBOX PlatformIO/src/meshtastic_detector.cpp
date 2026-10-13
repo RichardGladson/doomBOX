@@ -121,7 +121,7 @@ static void process_scan_result(esp_ble_gap_cb_param_t *scan_result) {
     for (size_t i = 0; i < meshtasticDevices.size(); i++) {
         if (strcmp(meshtasticDevices[i].address, addrStr) == 0) {
 
-            meshtasticDevices[i].rssi = scan_result->scan_rst.rssi;
+            meshtasticDevices[i].rssi = (int8_t)(((int)meshtasticDevices[i].rssi * 3 + (int)scan_result->scan_rst.rssi) / 4);
             meshtasticDevices[i].lastSeen = millis();
 
             uint8_t adv_name_len = 0;
@@ -275,7 +275,7 @@ void meshtasticDetectorSetup() {
     snprintf(countStr, sizeof(countStr), "%d/%d devices", 0, MAX_DEVICES);
     u8g2.drawStr(0, 35, countStr);
     u8g2.setFont(u8g2_font_5x8_tr);
-    u8g2.drawStr(0, 60, "Press SEL to exit");
+    u8g2.drawStr(0, 60, "L=Back");
     u8g2.sendBuffer();
     displayMirrorSend(u8g2);
 
@@ -325,7 +325,7 @@ void meshtasticDetectorLoop() {
             }
 
             u8g2.setFont(u8g2_font_5x8_tr);
-            u8g2.drawStr(0, 62, "Press SEL to exit");
+            u8g2.drawStr(0, 62, "L=Back");
 
             u8g2.sendBuffer();
             displayMirrorSend(u8g2);
@@ -388,7 +388,7 @@ void meshtasticDetectorLoop() {
                 ++listStartIndex;
             lastButtonPress = now;
             needsRedraw = true;
-        } else if (!isDetailView && !isLocateMode && digitalRead(BTN_RIGHT) == LOW &&
+        } else if (!isDetailView && !isLocateMode && digitalRead(BTN_CENTER) == LOW &&
                    !meshtasticDevices.empty()) {
             isDetailView = true;
             if (isScanning) {
@@ -397,7 +397,7 @@ void meshtasticDetectorLoop() {
             }
             lastButtonPress = now;
             needsRedraw = true;
-        } else if (isDetailView && !isLocateMode && digitalRead(BTN_RIGHT) == LOW &&
+        } else if (isDetailView && !isLocateMode && digitalRead(BTN_CENTER) == LOW &&
                    !meshtasticDevices.empty()) {
             isLocateMode = true;
             strncpy(locateTargetAddress, meshtasticDevices[currentIndex].address, sizeof(locateTargetAddress) - 1);
@@ -418,6 +418,7 @@ void meshtasticDetectorLoop() {
             }
             lastButtonPress = now;
             needsRedraw = true;
+            while (digitalRead(BTN_BACK) == LOW) delay(10);
         } else if (isDetailView && !isLocateMode && digitalRead(BTN_BACK) == LOW) {
             isDetailView = false;
             if (isScanning) {
@@ -426,6 +427,7 @@ void meshtasticDetectorLoop() {
             }
             lastButtonPress = now;
             needsRedraw = true;
+            while (digitalRead(BTN_BACK) == LOW) delay(10);
         }
     }
 
@@ -484,7 +486,7 @@ void meshtasticDetectorLoop() {
             u8g2.drawFrame(barX, barY, barWidth, barHeight);
 
             u8g2.setFont(u8g2_font_5x8_tr);
-            u8g2.drawStr(0, 62, "Press SEL to exit");
+            u8g2.drawStr(0, 62, "L=Back");
         } else {
 
             u8g2.setFont(u8g2_font_6x10_tr);
@@ -494,7 +496,7 @@ void meshtasticDetectorLoop() {
             unsigned long timeLeft = (scanInterval - (now - lastScanTime)) / 1000;
             snprintf(timeStr, sizeof(timeStr), "Scanning in %lus", timeLeft);
             u8g2.drawStr(0, 30, timeStr);
-            u8g2.drawStr(0, 45, "Press SEL to exit");
+            u8g2.drawStr(0, 45, "L=Back");
         }
     } else if (isLocateMode) {
         auto &dev = meshtasticDevices[currentIndex];
@@ -548,7 +550,7 @@ void meshtasticDetectorLoop() {
             }
         }
 
-        u8g2.drawStr(0, 62, "L=Back SEL=Exit");
+        u8g2.drawStr(0, 62, "L=Back");
     } else if (isDetailView) {
         u8g2.setFont(u8g2_font_5x8_tr);
         auto &dev = meshtasticDevices[currentIndex];
@@ -568,7 +570,7 @@ void meshtasticDetectorLoop() {
         u8g2.drawStr(0, 30, buf);
         snprintf(buf, sizeof(buf), "Age: %lus", (millis() - dev.lastSeen) / 1000);
         u8g2.drawStr(0, 40, buf);
-        u8g2.drawStr(0, 60, "L=Back SEL=Exit R=Locate");
+        u8g2.drawStr(0, 60, "L=Back SEL=Locate");
     } else {
         u8g2.setFont(u8g2_font_6x10_tr);
         char header[32];

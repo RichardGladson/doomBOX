@@ -279,7 +279,7 @@ static void drawBeaconSpamMenu() {
   u8g2.drawStr(0, 42, menuSelection == 2 ? "> Custom" : "  Custom");
   u8g2.drawStr(0, 52, menuSelection == 3 ? "> Random" : "  Random");
   u8g2.setFont(u8g2_font_5x8_tr);
-  u8g2.drawStr(0, 64, "U/D=Move R=OK SEL=Exit");
+  u8g2.drawStr(0, 64, "U/D=Move SEL=OK");
   u8g2.sendBuffer();
   displayMirrorSend(u8g2);
 }
@@ -302,7 +302,7 @@ static void drawSSIDList() {
     u8g2.drawStr(0, 30, "No SSIDs found");
   }
   u8g2.setFont(u8g2_font_5x8_tr);
-  u8g2.drawStr(0, 62, "U/D=Move R=Toggle L=Back");
+  u8g2.drawStr(0, 62, "U/D=Move SEL=Toggle R=Rescan L=Back");
   u8g2.sendBuffer();
   displayMirrorSend(u8g2);
 }
@@ -395,7 +395,7 @@ static void updateSSIDScan() {
     if (fill > 116) fill = 116;
     if (fill > 0) u8g2.drawBox(6, 37, fill, 6);
     u8g2.setFont(u8g2_font_5x8_tr);
-    u8g2.drawStr(0, 60, "Press SEL to exit");
+    u8g2.drawStr(0, 60, "L=Back");
     u8g2.sendBuffer();
     displayMirrorSend(u8g2);
     beacon_lastDisplayUpdate = now;
@@ -432,6 +432,7 @@ void beaconSpamSetup() {
   pinMode(BTN_DOWN, INPUT_PULLUP);
   pinMode(BTN_BACK, INPUT_PULLUP);
   pinMode(BTN_RIGHT, INPUT_PULLUP);
+  pinMode(BUTTON_PIN_CENTER, INPUT_PULLUP);
 
   totalCustomSSIDs = 0;
   int pLen = (int)strlen_P(ssids);
@@ -472,6 +473,7 @@ void beaconSpamLoop() {
   bool down = digitalRead(BTN_DOWN) == LOW;
   bool left = digitalRead(BTN_BACK) == LOW;
   bool right = digitalRead(BTN_RIGHT) == LOW;
+  bool select = digitalRead(BUTTON_PIN_CENTER) == LOW;
 
   bool anySelected = false;
   for (const auto& e : scannedSSIDs)
@@ -515,7 +517,7 @@ void beaconSpamLoop() {
         needsRedraw = true;
         delay(200);
       }
-      if (right) {
+      if (select) {
         if (menuSelection == 0) {
           startSSIDScan(BEACON_SPAM_CLONE_ALL);
         } else if (menuSelection == 1) {
@@ -550,7 +552,7 @@ void beaconSpamLoop() {
         u8g2.drawStr(0, 25, buf);
         u8g2.setFont(u8g2_font_5x8_tr);
         u8g2.drawStr(0, 40, "Spamming on CH: 1,6,11");
-        u8g2.drawStr(0, 62, "L=Back SEL=Exit");
+        u8g2.drawStr(0, 62, "L=Back");
         u8g2.sendBuffer();
         displayMirrorSend(u8g2);
       }
@@ -567,7 +569,8 @@ void beaconSpamLoop() {
       if (left) {
         beaconSpamMode = BEACON_SPAM_MENU;
         needsRedraw = true;
-        delay(200);
+        while (digitalRead(BTN_BACK) == LOW) delay(10);
+        delay(50);
       }
       break;
 
@@ -594,15 +597,20 @@ void beaconSpamLoop() {
         needsRedraw = true;
         delay(200);
       }
-      if (right && !scannedSSIDs.empty()) {
+      if (select && !scannedSSIDs.empty()) {
         scannedSSIDs[ssidIndex].selected = !scannedSSIDs[ssidIndex].selected;
         needsRedraw = true;
+        delay(200);
+      }
+      if (right) {
+        startSSIDScan(BEACON_SPAM_CLONE_SELECTED);
         delay(200);
       }
       if (left) {
         beaconSpamMode = BEACON_SPAM_MENU;
         needsRedraw = true;
-        delay(200);
+        while (digitalRead(BTN_BACK) == LOW) delay(10);
+        delay(50);
       }
 
       if (needsRedraw) {
@@ -629,7 +637,7 @@ void beaconSpamLoop() {
         u8g2.drawStr(0, 10, "Beacon Spam: Custom");
         u8g2.setFont(u8g2_font_5x8_tr);
         u8g2.drawStr(0, 25, "Spamming on CH: 1,6,11");
-        u8g2.drawStr(0, 62, "L=Back SEL=Exit");
+        u8g2.drawStr(0, 62, "L=Back");
         u8g2.sendBuffer();
         displayMirrorSend(u8g2);
       }
@@ -653,7 +661,8 @@ void beaconSpamLoop() {
       if (left) {
         beaconSpamMode = BEACON_SPAM_MENU;
         needsRedraw = true;
-        delay(200);
+        while (digitalRead(BTN_BACK) == LOW) delay(10);
+        delay(50);
       }
       break;
 
@@ -665,7 +674,7 @@ void beaconSpamLoop() {
         u8g2.drawStr(0, 10, "Beacon Spam: Random");
         u8g2.setFont(u8g2_font_5x8_tr);
         u8g2.drawStr(0, 25, "Spamming on CH: 1,6,11");
-        u8g2.drawStr(0, 62, "L=Back SEL=Exit");
+        u8g2.drawStr(0, 62, "L=Back");
         u8g2.sendBuffer();
         displayMirrorSend(u8g2);
       }

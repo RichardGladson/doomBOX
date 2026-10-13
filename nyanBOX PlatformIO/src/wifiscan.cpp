@@ -224,7 +224,8 @@ void addOrUpdateClient(const char* apBSSID, const char* clientMAC, int8_t rssi, 
 
     for (auto &client : ap->clients) {
         if (strcmp(client.clientMAC, clientMAC) == 0) {
-            client.rssi = rssi;
+            // EMA smooth: new = (old*3 + sample) / 4 — stabilizes locator
+            client.rssi = (int8_t)(((int)client.rssi * 3 + (int)rssi) / 4);
             client.lastSeen = now;
             client.packetCount++;
             client.frameTypes |= frameType;
@@ -414,7 +415,8 @@ void processScanResults(unsigned long now) {
             bool found = false;
             for (auto &net : wifiNetworks) {
                 if (strcmp(net.bssid, bssidStr) == 0) {
-                    net.rssi = ap_info[i].rssi;
+                    // EMA smooth RSSI to stabilise locator / signal bars
+                    net.rssi = (int8_t)(((int)net.rssi * 3 + (int)ap_info[i].rssi) / 4);
                     net.lastSeen = now;
                     strncpy(net.ssid, (char*)ap_info[i].ssid, sizeof(net.ssid) - 1);
                     net.ssid[sizeof(net.ssid) - 1] = '\0';
@@ -490,7 +492,7 @@ void wifiscanSetup() {
   snprintf(countStr, sizeof(countStr), "%d/%d networks", 0, MAX_NETWORKS);
   u8g2.drawStr(0, 35, countStr);
   u8g2.setFont(u8g2_font_5x8_tr);
-  u8g2.drawStr(0, 60, "Press SEL to exit");
+  u8g2.drawStr(0, 60, "L=Back  R=Rescan");
   u8g2.sendBuffer();
   displayMirrorSend(u8g2);
 
@@ -499,6 +501,7 @@ void wifiscanSetup() {
   pinMode(BTN_UP, INPUT_PULLUP);
   pinMode(BTN_DOWN, INPUT_PULLUP);
   pinMode(BTN_RIGHT, INPUT_PULLUP);
+  pinMode(BUTTON_PIN_CENTER, INPUT_PULLUP);
   pinMode(BTN_BACK, INPUT_PULLUP);
 
   wifi_scan_config_t scan_config = {
@@ -813,7 +816,7 @@ void wifiscanLoop() {
         }
 
       u8g2.setFont(u8g2_font_5x8_tr);
-      u8g2.drawStr(0, 62, "Press SEL to exit");
+      u8g2.drawStr(0, 62, "L=Back  R=Rescan");
       u8g2.sendBuffer();
       displayMirrorSend(u8g2);
       needsRedraw = false;
@@ -839,12 +842,22 @@ void wifiscanLoop() {
         ++listStartIndex;
       lastButtonPress = now;
       needsRedraw = true;
-    } else if (!isDetailView && !isLocateMode && !isClientsView && digitalRead(BTN_RIGHT) == LOW &&
+    } else if (!isDetailView && !isLocateMode && !isClientsView && digitalRead(BUTTON_PIN_CENTER) == LOW &&
                !wifiNetworks.empty()) {
       isDetailView = true;
       lastButtonPress = now;
       needsRedraw = true;
-    } else if (isDetailView && !isLocateMode && !isClientsView && digitalRead(BTN_RIGHT) == LOW &&
+    } else if (!isDetailView && !isLocateMode && !isClientsView && digitalRead(BTN_RIGHT) == LOW) {
+      // RIGHT = force rescan
+      if (wifiscan_isScanning) {
+        esp_wifi_scan_stop();
+        wifiscan_isScanning = false;
+      }
+      currentScanPhase = PHASE_AP_SCAN;
+      phaseStartTime = now;
+      lastButtonPress = now;
+      needsRedraw = true;
+    } else if (isDetailView && !isLocateMode && !isClientsView && digitalRead(BUTTON_PIN_CENTER) == LOW &&
                !wifiNetworks.empty()) {
       isLocateMode = true;
       strncpy(locateTargetBSSID, wifiNetworks[currentIndex].bssid, sizeof(locateTargetBSSID) - 1);
@@ -900,6 +913,7 @@ void wifiscanLoop() {
 
       lastButtonPress = now;
       needsRedraw = true;
+      while (digitalRead(BTN_BACK) == LOW) delay(10);
     } else if (isDetailView && !isLocateMode && !isClientsView && digitalRead(BTN_DOWN) == LOW &&
                !wifiNetworks.empty()) {
       isClientsView = true;
@@ -921,13 +935,13 @@ void wifiscanLoop() {
         ++clientListStartIndex;
       lastButtonPress = now;
       needsRedraw = true;
-    } else if (isClientsView && !isClientDetailView && digitalRead(BTN_RIGHT) == LOW &&
+    } else if (isClientsView && !isClientDetailView && digitalRead(BUTTON_PIN_CENTER) == LOW &&
                !wifiNetworks.empty() && currentIndex < (int)wifiNetworks.size() &&
                !wifiNetworks[currentIndex].clients.empty()) {
       isClientDetailView = true;
       lastButtonPress = now;
       needsRedraw = true;
-    } else if (isClientDetailView && !isClientDeauthMode && digitalRead(BTN_RIGHT) == LOW &&
+    } else if (isClientDetailView && !isClientDeauthMode && digitalRead(BUTTON_PIN_CENTER) == LOW &&
                !wifiNetworks.empty() && currentIndex < (int)wifiNetworks.size() &&
                currentClientIndex < (int)wifiNetworks[currentIndex].clients.size()) {
       isClientDeauthMode = true;
@@ -990,6 +1004,7 @@ void wifiscanLoop() {
       isDetailView = false;
       lastButtonPress = now;
       needsRedraw = true;
+            while (digitalRead(BTN_BACK) == LOW) delay(10);
     }
   }
 
@@ -1050,7 +1065,7 @@ void wifiscanLoop() {
       u8g2.drawStr(0, 30, timeStr);
     }
     u8g2.setFont(u8g2_font_5x8_tr);
-    u8g2.drawStr(0, 62, "Press SEL to exit");
+    u8g2.drawStr(0, 62, "L=Back  R=Rescan");
   } else if (isLocateMode) {
     auto &net = wifiNetworks[currentIndex];
     u8g2.setFont(u8g2_font_5x8_tr);
@@ -1103,7 +1118,7 @@ void wifiscanLoop() {
       }
     }
 
-    u8g2.drawStr(0, 62, "L=Back SEL=Exit");
+    u8g2.drawStr(0, 62, "L=Back R=Rescan");
   } else if (isClientDeauthMode) {
     auto &net = wifiNetworks[currentIndex];
     u8g2.setFont(u8g2_font_6x10_tr);
@@ -1159,7 +1174,7 @@ void wifiscanLoop() {
       }
       u8g2.drawStr(0, 38, statusStr);
 
-      u8g2.drawStr(0, 62, "L=Back R=Deauth");
+      u8g2.drawStr(0, 62, "L=Back SEL=Deauth");
     }
   } else if (isClientsView) {
     auto &net = wifiNetworks[currentIndex];
@@ -1205,7 +1220,7 @@ void wifiscanLoop() {
         u8g2.drawStr(100, y, buf);
       }
 
-      u8g2.drawStr(0, 62, "L=Back U/D=Scroll R=Detail");
+      u8g2.drawStr(0, 62, "L=Back U/D=Scroll SEL=Detail");
     }
   } else if (isDetailView) {
     auto &net = wifiNetworks[currentIndex];
@@ -1231,7 +1246,7 @@ void wifiscanLoop() {
     snprintf(buf, sizeof(buf), "Age: %lus  Clients: %d", (now - net.lastSeen) / 1000, net.clientCount);
     u8g2.drawStr(0, 50, buf);
 
-    u8g2.drawStr(0, 62, "L=Back D=Clients R=Locate");
+    u8g2.drawStr(0, 62, "L=Back D=Clients SEL=Locate");
   } else {
     u8g2.setFont(u8g2_font_6x10_tr);
     char header[32];

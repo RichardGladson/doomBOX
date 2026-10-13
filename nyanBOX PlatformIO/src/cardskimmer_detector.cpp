@@ -135,7 +135,7 @@ static void process_scan_result(esp_ble_gap_cb_param_t *scan_result) {
 
     for (size_t i = 0; i < skimmerDevices.size(); i++) {
         if (strcmp(skimmerDevices[i].address, addrStr) == 0) {
-            skimmerDevices[i].rssi = scan_result->scan_rst.rssi;
+            skimmerDevices[i].rssi = (int8_t)(((int)skimmerDevices[i].rssi * 3 + (int)scan_result->scan_rst.rssi) / 4);
             skimmerDevices[i].lastSeen = millis();
 
             if (!isLocateMode) {
@@ -233,7 +233,7 @@ void cardskimmerDetectorSetup() {
     snprintf(countStr, sizeof(countStr), "%d/%d devices", 0, MAX_DEVICES);
     u8g2.drawStr(0, 35, countStr);
     u8g2.setFont(u8g2_font_5x8_tr);
-    u8g2.drawStr(0, 60, "Press SEL to exit");
+    u8g2.drawStr(0, 60, "L=Back");
     u8g2.sendBuffer();
     displayMirrorSend(u8g2);
 
@@ -283,7 +283,7 @@ void cardskimmerDetectorLoop() {
             }
 
             u8g2.setFont(u8g2_font_5x8_tr);
-            u8g2.drawStr(0, 62, "Press SEL to exit");
+            u8g2.drawStr(0, 62, "L=Back");
 
             u8g2.sendBuffer();
             displayMirrorSend(u8g2);
@@ -346,7 +346,7 @@ void cardskimmerDetectorLoop() {
                 ++listStartIndex;
             lastButtonPress = now;
             needsRedraw = true;
-        } else if (!isDetailView && !isLocateMode && digitalRead(BTN_RIGHT) == LOW &&
+        } else if (!isDetailView && !isLocateMode && digitalRead(BTN_CENTER) == LOW &&
                    !skimmerDevices.empty()) {
             isDetailView = true;
             if (isScanning) {
@@ -355,7 +355,7 @@ void cardskimmerDetectorLoop() {
             }
             lastButtonPress = now;
             needsRedraw = true;
-        } else if (isDetailView && !isLocateMode && digitalRead(BTN_RIGHT) == LOW &&
+        } else if (isDetailView && !isLocateMode && digitalRead(BTN_CENTER) == LOW &&
                    !skimmerDevices.empty()) {
             isLocateMode = true;
             strncpy(locateTargetAddress, skimmerDevices[currentIndex].address, sizeof(locateTargetAddress) - 1);
@@ -376,6 +376,7 @@ void cardskimmerDetectorLoop() {
             }
             lastButtonPress = now;
             needsRedraw = true;
+            while (digitalRead(BTN_BACK) == LOW) delay(10);
         } else if (isDetailView && !isLocateMode && digitalRead(BTN_BACK) == LOW) {
             isDetailView = false;
             if (isScanning) {
@@ -384,6 +385,7 @@ void cardskimmerDetectorLoop() {
             }
             lastButtonPress = now;
             needsRedraw = true;
+            while (digitalRead(BTN_BACK) == LOW) delay(10);
         }
     }
 
@@ -442,7 +444,7 @@ void cardskimmerDetectorLoop() {
             u8g2.drawFrame(barX, barY, barWidth, barHeight);
 
             u8g2.setFont(u8g2_font_5x8_tr);
-            u8g2.drawStr(0, 62, "Press SEL to exit");
+            u8g2.drawStr(0, 62, "L=Back");
         } else {
             u8g2.setFont(u8g2_font_6x10_tr);
             u8g2.drawStr(0, 10, "No skimmers found");
@@ -451,7 +453,7 @@ void cardskimmerDetectorLoop() {
             unsigned long timeLeft = (scanInterval - (now - lastScanTime)) / 1000;
             snprintf(timeStr, sizeof(timeStr), "Scanning in %lus", timeLeft);
             u8g2.drawStr(0, 30, timeStr);
-            u8g2.drawStr(0, 45, "Press SEL to exit");
+            u8g2.drawStr(0, 45, "L=Back");
         }
     } else if (isLocateMode) {
         auto &dev = skimmerDevices[currentIndex];
@@ -505,7 +507,7 @@ void cardskimmerDetectorLoop() {
             }
         }
 
-        u8g2.drawStr(0, 62, "L=Back SEL=Exit");
+        u8g2.drawStr(0, 62, "L=Back");
     } else if (isDetailView && !skimmerDevices.empty() && currentIndex >= 0 && currentIndex < (int)skimmerDevices.size()) {
         u8g2.setFont(u8g2_font_5x8_tr);
         auto &dev = skimmerDevices[currentIndex];
@@ -528,7 +530,7 @@ void cardskimmerDetectorLoop() {
         snprintf(buf, sizeof(buf), "Age: %lus", (millis() - dev.lastSeen) / 1000);
         u8g2.drawStr(0, 40, buf);
 
-        u8g2.drawStr(0, 60, "L=Back SEL=Exit R=Locate");
+        u8g2.drawStr(0, 60, "L=Back SEL=Locate");
     } else {
         u8g2.setFont(u8g2_font_6x10_tr);
         char header[32];

@@ -52,7 +52,7 @@ uint32_t parseAdvertiserVersionToNumber(const char *versionStr) {
 void createManufacturerData(uint8_t *manufData) {
     manufData[0] = 0xFF;
     manufData[1] = 0xFF;
-    uint16_t level = getCurrentLevel();
+    uint16_t level = 0;  // leveling removed; keep field for protocol compat
     uint32_t version = parseAdvertiserVersionToNumber(NYANBOX_VERSION);
     manufData[2] = (level >> 8) & 0xFF;
     manufData[3] = level & 0xFF;

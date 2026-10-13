@@ -30,6 +30,7 @@ namespace {
 #define BTN_DOWN BUTTON_PIN_DOWN
 #define BTN_RIGHT BUTTON_PIN_RIGHT
 #define BTN_BACK BUTTON_PIN_LEFT
+#define BTN_CENTER BUTTON_PIN_CENTER
 
 enum ScanPhase {
   PHASE_WIFI_INIT,
@@ -136,7 +137,7 @@ void addOrUpdateScoutDevice(const char* name, const char* address, int8_t rssi, 
 
     for (size_t i = 0; i < scoutDevices.size(); i++) {
         if (strcmp(scoutDevices[i].address, address) == 0) {
-            scoutDevices[i].rssi = rssi;
+            scoutDevices[i].rssi = (int8_t)(((int)scoutDevices[i].rssi * 3 + (int)rssi) / 4);
             scoutDevices[i].lastSeen = now;
             scoutDevices[i].channel = channel;
 
@@ -394,7 +395,7 @@ void drawDetailView() {
     snprintf(line, sizeof(line), "Scans:%-4d Age:%s", dev.scanCount, ageLine);
     u8g2.drawStr(0, 48, line);
 
-    u8g2.drawStr(0, 64, "L=Back R=Locate");
+    u8g2.drawStr(0, 64, "L=Back SEL=Locate");
 
     u8g2.sendBuffer();
     displayMirrorSend(u8g2);
@@ -464,7 +465,7 @@ void drawLocateView() {
         }
     }
 
-    u8g2.drawStr(0, 62, "L=Back SEL=Exit");
+    u8g2.drawStr(0, 62, "L=Back");
 
     u8g2.sendBuffer();
     displayMirrorSend(u8g2);
@@ -510,6 +511,7 @@ void deviceScoutSetup() {
     pinMode(BTN_UP, INPUT_PULLUP);
     pinMode(BTN_DOWN, INPUT_PULLUP);
     pinMode(BTN_RIGHT, INPUT_PULLUP);
+    pinMode(BTN_CENTER, INPUT_PULLUP);
     pinMode(BTN_BACK, INPUT_PULLUP);
 
     phaseStartTime = millis();
@@ -588,7 +590,7 @@ void deviceScoutLoop() {
                     }
 
                     u8g2.setFont(u8g2_font_5x8_tr);
-                    u8g2.drawStr(0, 62, "Press SEL to exit");
+                    u8g2.drawStr(0, 62, "L=Back");
 
                     u8g2.sendBuffer();
                     displayMirrorSend(u8g2);
@@ -644,7 +646,7 @@ void deviceScoutLoop() {
                     }
 
                     u8g2.setFont(u8g2_font_5x8_tr);
-                    u8g2.drawStr(0, 62, "Press SEL to exit");
+                    u8g2.drawStr(0, 62, "L=Back");
 
                     u8g2.sendBuffer();
                     displayMirrorSend(u8g2);
@@ -710,12 +712,12 @@ void deviceScoutLoop() {
                 ++listStartIndex;
             lastButtonPress = now;
             needsRedraw = true;
-        } else if (!isDetailView && !isLocateMode && digitalRead(BTN_RIGHT) == LOW &&
+        } else if (!isDetailView && !isLocateMode && digitalRead(BTN_CENTER) == LOW &&
                    !scoutDevices.empty()) {
             isDetailView = true;
             lastButtonPress = now;
             needsRedraw = true;
-        } else if (isDetailView && !isLocateMode && digitalRead(BTN_RIGHT) == LOW &&
+        } else if (isDetailView && !isLocateMode && digitalRead(BTN_CENTER) == LOW &&
                    !scoutDevices.empty()) {
             isLocateMode = true;
             strncpy(locateTargetAddress, scoutDevices[currentIndex].address, sizeof(locateTargetAddress) - 1);
@@ -767,6 +769,7 @@ void deviceScoutLoop() {
             isDetailView = false;
             lastButtonPress = now;
             needsRedraw = true;
+            while (digitalRead(BTN_BACK) == LOW) delay(10);
         }
     }
 
@@ -825,7 +828,7 @@ void deviceScoutLoop() {
             u8g2.drawFrame(barX, barY, barWidth, barHeight);
 
             u8g2.setFont(u8g2_font_5x8_tr);
-            u8g2.drawStr(0, 62, "Press SEL to exit");
+            u8g2.drawStr(0, 62, "L=Back");
         } else {
             u8g2.setFont(u8g2_font_6x10_tr);
             u8g2.drawStr(0, 10, "No devices found");
@@ -834,7 +837,7 @@ void deviceScoutLoop() {
             unsigned long timeLeft = (scanInterval - (now - lastScanTime)) / 1000;
             snprintf(timeStr, sizeof(timeStr), "Scanning in %lus", timeLeft);
             u8g2.drawStr(0, 30, timeStr);
-            u8g2.drawStr(0, 45, "Press SEL to exit");
+            u8g2.drawStr(0, 45, "L=Back");
         }
     } else if (isLocateMode) {
         drawLocateView();

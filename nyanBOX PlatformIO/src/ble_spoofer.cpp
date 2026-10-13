@@ -62,7 +62,7 @@ static void drawMainMenu() {
     u8g2.drawStr(0, 28, "No BLE devices found!");
     u8g2.drawStr(0, 44, "Run BLE Scan first");
     u8g2.setFont(u8g2_font_5x8_tr);
-    u8g2.drawStr(0, 62, "SEL=Exit");
+    u8g2.drawStr(0, 62, "L=Back");
   } else {
     const char* menuItems[] = {
       "Clone Target",
@@ -78,7 +78,7 @@ static void drawMainMenu() {
     }
 
     u8g2.setFont(u8g2_font_5x8_tr);
-    u8g2.drawStr(0, 62, "U/D=NAV R=OK SEL=Exit");
+    u8g2.drawStr(0, 62, "U/D=NAV SEL=OK L=Back");
   }
 
   u8g2.sendBuffer();
@@ -116,7 +116,7 @@ static void drawCloneSelect() {
            target.payloadLength, target.scanResponseLength);
   u8g2.drawStr(0, 48, dataInfo);
 
-  u8g2.drawStr(0, 62, "L=Back U/D=Scroll R=Start");
+  u8g2.drawStr(0, 62, "L=Back U/D=Scroll SEL=Start");
 
   u8g2.sendBuffer();
   displayMirrorSend(u8g2);
@@ -151,7 +151,7 @@ static void drawCloneRunning() {
            isAdvertising ? "ON" : "OFF");
   u8g2.drawStr(0, 48, statusStr);
 
-  u8g2.drawStr(0, 62, "L=Back SEL=Exit");
+  u8g2.drawStr(0, 62, "L=Back L=Back");
 
   u8g2.sendBuffer();
   displayMirrorSend(u8g2);
@@ -169,7 +169,7 @@ static void drawCloneAllRunning() {
   u8g2.drawStr(0, 44, "Advertising...");
 
   u8g2.setFont(u8g2_font_5x8_tr);
-  u8g2.drawStr(0, 62, "L=Back SEL=Exit");
+  u8g2.drawStr(0, 62, "L=Back L=Back");
 
   u8g2.sendBuffer();
   displayMirrorSend(u8g2);
@@ -282,7 +282,7 @@ void bleSpooferLoop() {
   static bool rightPressed = false, leftPressed = false;
   bool upNow = digitalRead(BTN_UP) == LOW;
   bool downNow = digitalRead(BTN_DOWN) == LOW;
-  bool rightNow = digitalRead(BTN_RIGHT) == LOW;
+  bool rightNow = digitalRead(BTN_CENTER) == LOW;
   bool leftNow = digitalRead(BTN_BACK) == LOW;
   bool centerNow = digitalRead(BTN_CENTER) == LOW;
 

@@ -119,7 +119,7 @@ static void process_scan_result(esp_ble_gap_cb_param_t *scan_result) {
     unsigned long now = millis();
     for (size_t i = 0; i < tileDevices.size(); i++) {
         if (strcmp(tileDevices[i].address, addrStr) == 0) {
-            tileDevices[i].rssi = scan_result->scan_rst.rssi;
+            tileDevices[i].rssi = (int8_t)(((int)tileDevices[i].rssi * 3 + (int)scan_result->scan_rst.rssi) / 4);
             tileDevices[i].lastSeen = now;
 
             uint8_t adv_name_len = 0;
@@ -273,7 +273,7 @@ void tileDetectorSetup() {
     snprintf(countStr, sizeof(countStr), "%d/%d devices", 0, MAX_DEVICES);
     u8g2.drawStr(0, 35, countStr);
     u8g2.setFont(u8g2_font_5x8_tr);
-    u8g2.drawStr(0, 60, "Press SEL to exit");
+    u8g2.drawStr(0, 60, "L=Back");
     u8g2.sendBuffer();
     displayMirrorSend(u8g2);
 
@@ -323,7 +323,7 @@ void tileDetectorLoop() {
             }
 
             u8g2.setFont(u8g2_font_5x8_tr);
-            u8g2.drawStr(0, 62, "Press SEL to exit");
+            u8g2.drawStr(0, 62, "L=Back");
 
             u8g2.sendBuffer();
             displayMirrorSend(u8g2);
@@ -385,7 +385,7 @@ void tileDetectorLoop() {
                 ++listStartIndex;
             lastButtonPress = now;
             needsRedraw = true;
-        } else if (!isDetailView && !isLocateMode && digitalRead(BTN_RIGHT) == LOW &&
+        } else if (!isDetailView && !isLocateMode && digitalRead(BTN_CENTER) == LOW &&
                    !tileDevices.empty()) {
             isDetailView = true;
             if (isScanning) {
@@ -394,7 +394,7 @@ void tileDetectorLoop() {
             }
             lastButtonPress = now;
             needsRedraw = true;
-        } else if (isDetailView && !isLocateMode && digitalRead(BTN_RIGHT) == LOW &&
+        } else if (isDetailView && !isLocateMode && digitalRead(BTN_CENTER) == LOW &&
                    !tileDevices.empty()) {
             isLocateMode = true;
             strncpy(locateTargetAddress, tileDevices[currentIndex].address, sizeof(locateTargetAddress) - 1);
@@ -415,6 +415,7 @@ void tileDetectorLoop() {
             }
             lastButtonPress = now;
             needsRedraw = true;
+            while (digitalRead(BTN_BACK) == LOW) delay(10);
         } else if (isDetailView && !isLocateMode && digitalRead(BTN_BACK) == LOW) {
             isDetailView = false;
             if (isScanning) {
@@ -423,6 +424,7 @@ void tileDetectorLoop() {
             }
             lastButtonPress = now;
             needsRedraw = true;
+            while (digitalRead(BTN_BACK) == LOW) delay(10);
         }
     }
 
@@ -480,7 +482,7 @@ void tileDetectorLoop() {
             u8g2.drawFrame(barX, barY, barWidth, barHeight);
 
             u8g2.setFont(u8g2_font_5x8_tr);
-            u8g2.drawStr(0, 62, "Press SEL to exit");
+            u8g2.drawStr(0, 62, "L=Back");
         } else {
             u8g2.setFont(u8g2_font_6x10_tr);
             u8g2.drawStr(0, 10, "No Tiles found");
@@ -489,7 +491,7 @@ void tileDetectorLoop() {
             unsigned long timeLeft = (scanInterval - (now - lastScanTime)) / 1000;
             snprintf(timeStr, sizeof(timeStr), "Scanning in %lus", timeLeft);
             u8g2.drawStr(0, 30, timeStr);
-            u8g2.drawStr(0, 45, "Press SEL to exit");
+            u8g2.drawStr(0, 45, "L=Back");
         }
     } else if (isLocateMode) {
         auto &dev = tileDevices[currentIndex];
@@ -543,7 +545,7 @@ void tileDetectorLoop() {
             }
         }
 
-        u8g2.drawStr(0, 62, "L=Back SEL=Exit");
+        u8g2.drawStr(0, 62, "L=Back");
     } else if (isDetailView) {
         auto &dev = tileDevices[currentIndex];
         u8g2.setFont(u8g2_font_5x8_tr);
@@ -562,7 +564,7 @@ void tileDetectorLoop() {
         u8g2.drawStr(0, 30, buf);
         snprintf(buf, sizeof(buf), "Age: %lus", (millis() - dev.lastSeen) / 1000);
         u8g2.drawStr(0, 40, buf);
-        u8g2.drawStr(0, 60, "L=Back SEL=Exit R=Locate");
+        u8g2.drawStr(0, 60, "L=Back SEL=Locate");
     } else {
         u8g2.setFont(u8g2_font_6x10_tr);
         char header[32];

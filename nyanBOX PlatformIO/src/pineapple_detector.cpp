@@ -24,6 +24,7 @@ extern U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2;
 #define BTN_DOWN BUTTON_PIN_DOWN
 #define BTN_RIGHT BUTTON_PIN_RIGHT
 #define BTN_BACK BUTTON_PIN_LEFT
+#define BTN_CENTER BUTTON_PIN_CENTER
 
 struct PineappleDeviceData {
   char ssid[33];
@@ -148,7 +149,7 @@ static void addOrUpdatePineappleDevice(const char* ssid, const char* bssid, int8
 
     for (size_t i = 0; i < pineappleDevices.size(); i++) {
         if (strcmp(pineappleDevices[i].bssid, bssid) == 0) {
-            pineappleDevices[i].rssi = rssi;
+            pineappleDevices[i].rssi = (int8_t)(((int)pineappleDevices[i].rssi * 3 + (int)rssi) / 4);
             pineappleDevices[i].lastSeen = millis();
             pineappleDevices[i].channel = channel;
 
@@ -301,6 +302,7 @@ void pineappleDetectorSetup() {
     pinMode(BTN_UP, INPUT_PULLUP);
     pinMode(BTN_DOWN, INPUT_PULLUP);
     pinMode(BTN_RIGHT, INPUT_PULLUP);
+    pinMode(BTN_CENTER, INPUT_PULLUP);
     pinMode(BTN_BACK, INPUT_PULLUP);
 
     scanStartTime = millis();
@@ -365,7 +367,7 @@ void pineappleDetectorLoop() {
                 }
 
                 u8g2.setFont(u8g2_font_5x8_tr);
-                u8g2.drawStr(0, 62, "Press SEL to exit");
+                u8g2.drawStr(0, 62, "L=Back");
 
                 u8g2.sendBuffer();
                 displayMirrorSend(u8g2);
@@ -425,13 +427,13 @@ void pineappleDetectorLoop() {
                 ++listStartIndex;
             lastButtonPress = now;
             needsRedraw = true;
-        } else if (!isDetailView && !isLocateMode && digitalRead(BTN_RIGHT) == LOW &&
+        } else if (!isDetailView && !isLocateMode && digitalRead(BTN_CENTER) == LOW &&
                    !pineappleDevices.empty()) {
             isDetailView = true;
             esp_wifi_set_promiscuous(false);
             lastButtonPress = now;
             needsRedraw = true;
-        } else if (isDetailView && !isLocateMode && digitalRead(BTN_RIGHT) == LOW &&
+        } else if (isDetailView && !isLocateMode && digitalRead(BTN_CENTER) == LOW &&
                    !pineappleDevices.empty()) {
             isLocateMode = true;
             strncpy(locateTargetBSSID, pineappleDevices[currentIndex].bssid, sizeof(locateTargetBSSID) - 1);
@@ -462,6 +464,7 @@ void pineappleDetectorLoop() {
             isDetailView = false;
             lastButtonPress = now;
             needsRedraw = true;
+            while (digitalRead(BTN_BACK) == LOW) delay(10);
         }
     }
 
@@ -519,7 +522,7 @@ void pineappleDetectorLoop() {
             u8g2.drawFrame(barX, barY, barWidth, barHeight);
 
             u8g2.setFont(u8g2_font_5x8_tr);
-            u8g2.drawStr(0, 62, "Press SEL to exit");
+            u8g2.drawStr(0, 62, "L=Back");
         } else {
             u8g2.setFont(u8g2_font_6x10_tr);
             u8g2.drawStr(0, 10, "No Pineapples");
@@ -528,7 +531,7 @@ void pineappleDetectorLoop() {
             unsigned long timeLeft = (scanInterval - (now - lastScanTime)) / 1000;
             snprintf(timeStr, sizeof(timeStr), "Scanning in %lus", timeLeft);
             u8g2.drawStr(0, 30, timeStr);
-            u8g2.drawStr(0, 45, "Press SEL to exit");
+            u8g2.drawStr(0, 45, "L=Back");
         }
     } else if (isLocateMode) {
         auto &dev = pineappleDevices[currentIndex];
@@ -586,7 +589,7 @@ void pineappleDetectorLoop() {
             }
         }
 
-        u8g2.drawStr(0, 62, "L=Back SEL=Exit");
+        u8g2.drawStr(0, 62, "L=Back");
     } else if (isDetailView) {
         u8g2.setFont(u8g2_font_5x8_tr);
         auto &dev = pineappleDevices[currentIndex];
@@ -615,7 +618,7 @@ void pineappleDetectorLoop() {
         snprintf(buf, sizeof(buf), "Age: %lus", (millis() - dev.lastSeen) / 1000);
         u8g2.drawStr(0, 50, buf);
 
-        u8g2.drawStr(0, 60, "L=Back SEL=Exit R=Locate");
+        u8g2.drawStr(0, 60, "L=Back SEL=Locate");
     } else {
         u8g2.setFont(u8g2_font_6x10_tr);
         char header[32];

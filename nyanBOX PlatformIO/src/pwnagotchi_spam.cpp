@@ -309,7 +309,7 @@ void pwnagotchiSpamLoop() {
 
     u8g2.setFont(u8g2_font_4x6_tr);
     const char* line1 = "UP=Start/Stop  DOWN=Mode";
-    const char* line2 = "SEL=Exit";
+    const char* line2 = "L=Back";
 
     int line1Width = u8g2.getUTF8Width(line1);
     int line2Width = u8g2.getUTF8Width(line2);

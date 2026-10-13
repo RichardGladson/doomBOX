@@ -187,7 +187,7 @@ void addOrUpdateFlockDevice(const char* name, const char* address, int8_t rssi, 
 
     for (size_t i = 0; i < flockDevices.size(); i++) {
         if (strcmp(flockDevices[i].address, address) == 0) {
-            flockDevices[i].rssi = rssi;
+            flockDevices[i].rssi = (int8_t)(((int)flockDevices[i].rssi * 3 + (int)rssi) / 4);
             flockDevices[i].lastSeen = millis();
 
             if (strlen(name) > 0 && strcmp(name, "Flock Device") != 0) {
@@ -483,7 +483,7 @@ void flockDetectorLoop() {
                     }
 
                     u8g2.setFont(u8g2_font_5x8_tr);
-                    u8g2.drawStr(0, 62, "Press SEL to exit");
+                    u8g2.drawStr(0, 62, "L=Back");
 
                     u8g2.sendBuffer();
                     displayMirrorSend(u8g2);
@@ -539,7 +539,7 @@ void flockDetectorLoop() {
                     }
 
                     u8g2.setFont(u8g2_font_5x8_tr);
-                    u8g2.drawStr(0, 62, "Press SEL to exit");
+                    u8g2.drawStr(0, 62, "L=Back");
 
                     u8g2.sendBuffer();
                     displayMirrorSend(u8g2);
@@ -601,13 +601,13 @@ void flockDetectorLoop() {
                 ++listStartIndex;
             lastButtonPress = now;
             needsRedraw = true;
-        } else if (!isDetailView && !isLocateMode && digitalRead(BTN_RIGHT) == LOW &&
+        } else if (!isDetailView && !isLocateMode && digitalRead(BTN_CENTER) == LOW &&
                    !flockDevices.empty()) {
             isDetailView = true;
             esp_wifi_set_promiscuous(false);
             lastButtonPress = now;
             needsRedraw = true;
-        } else if (isDetailView && !isLocateMode && digitalRead(BTN_RIGHT) == LOW &&
+        } else if (isDetailView && !isLocateMode && digitalRead(BTN_CENTER) == LOW &&
                    !flockDevices.empty()) {
             isLocateMode = true;
             strncpy(locateTargetAddress, flockDevices[currentIndex].address, sizeof(locateTargetAddress) - 1);
@@ -656,6 +656,7 @@ void flockDetectorLoop() {
             isDetailView = false;
             lastButtonPress = now;
             needsRedraw = true;
+            while (digitalRead(BTN_BACK) == LOW) delay(10);
         }
     }
 
@@ -713,7 +714,7 @@ void flockDetectorLoop() {
             u8g2.drawFrame(barX, barY, barWidth, barHeight);
 
             u8g2.setFont(u8g2_font_5x8_tr);
-            u8g2.drawStr(0, 62, "Press SEL to exit");
+            u8g2.drawStr(0, 62, "L=Back");
         } else {
             u8g2.setFont(u8g2_font_6x10_tr);
             u8g2.drawStr(0, 10, "No Flock devices");
@@ -722,7 +723,7 @@ void flockDetectorLoop() {
             unsigned long timeLeft = (scanInterval - (now - lastScanTime)) / 1000;
             snprintf(timeStr, sizeof(timeStr), "Scanning in %lus", timeLeft);
             u8g2.drawStr(0, 30, timeStr);
-            u8g2.drawStr(0, 45, "Press SEL to exit");
+            u8g2.drawStr(0, 45, "L=Back");
         }
     } else if (isLocateMode) {
         auto &dev = flockDevices[currentIndex];
@@ -776,7 +777,7 @@ void flockDetectorLoop() {
             }
         }
 
-        u8g2.drawStr(0, 62, "L=Back SEL=Exit");
+        u8g2.drawStr(0, 62, "L=Back");
     } else if (isDetailView) {
         u8g2.setFont(u8g2_font_5x8_tr);
         auto &dev = flockDevices[currentIndex];
@@ -795,7 +796,7 @@ void flockDetectorLoop() {
         u8g2.drawStr(0, 40, buf);
         snprintf(buf, sizeof(buf), "Age: %lus", (millis() - dev.lastSeen) / 1000);
         u8g2.drawStr(0, 50, buf);
-        u8g2.drawStr(0, 60, "L=Back SEL=Exit R=Locate");
+        u8g2.drawStr(0, 60, "L=Back SEL=Locate");
     } else {
         u8g2.setFont(u8g2_font_6x10_tr);
         char header[32];

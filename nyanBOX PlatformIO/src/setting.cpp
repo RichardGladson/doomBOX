@@ -209,8 +209,7 @@ void settingLoop() {
             break;
 
           case 5:
-            showResetConfirm = true;
-            needsRedraw = true;
+            // Uptime is read-only; no action
             break;
         }
       }
@@ -317,12 +316,19 @@ void settingLoop() {
           u8g2.drawStr(10, yPos, "Password:");
           u8g2.drawStr(85, yPos, passwordEnabled() ? "On" : "Off");
           break;
-        case 5:
-          u8g2.drawStr(10, yPos, "Reset XP:");
-          char lvlStr[8];
-          sprintf(lvlStr, "Lv%d", getCurrentLevel());
-          u8g2.drawStr(85, yPos, lvlStr);
+        case 5: {
+          u8g2.drawStr(10, yPos, "Uptime:");
+          char upStr[12];
+          uint32_t secs = getTotalUptimeSeconds();
+          if (secs >= 86400UL)
+            sprintf(upStr, "%lud", (unsigned long)(secs / 86400UL));
+          else if (secs >= 3600UL)
+            sprintf(upStr, "%luh", (unsigned long)(secs / 3600UL));
+          else
+            sprintf(upStr, "%lum", (unsigned long)(secs / 60UL));
+          u8g2.drawStr(85, yPos, upStr);
           break;
+        }
       }
       displayIndex++;
     }

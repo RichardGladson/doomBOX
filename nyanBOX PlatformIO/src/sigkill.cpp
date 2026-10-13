@@ -199,7 +199,7 @@ static void drawSigMenu() {
   u8g2.drawBox(scrollbarX + 1, thumbY, scrollbarWidth - 2, thumbHeight);
 
   u8g2.setFont(u8g2_font_5x8_tr);
-  u8g2.drawStr(0, 62, "U/D=Move SEL=Start L=Back");
+  u8g2.drawStr(0, 62, "U/D=Move R=Start L=Back");
   u8g2.sendBuffer();
   displayMirrorSend(u8g2);
 }
@@ -381,7 +381,7 @@ void sigkillLoop() {
           } else {
             currentMode = SIG_JAMMING;
             initializeRadios();
-            setMinimumLevel(97);  // Legend unlock for using SigKill
+            
           }
           needsRedraw = true;
           lastButtonPress = now;
@@ -407,7 +407,7 @@ void sigkillLoop() {
         } else if (select) {
           currentMode = SIG_JAMMING;
           initializeRadios();
-          setMinimumLevel(97);  // Legend unlock for using SigKill
+          
           if (radioReady && wifiChannelSelection > 0) {
             radios[0].setChannel(wifiChannelSelection);
           }
@@ -417,6 +417,7 @@ void sigkillLoop() {
           currentMode = SIG_MENU;
           needsRedraw = true;
           lastButtonPress = now;
+          while (digitalRead(BUTTON_PIN_LEFT) == LOW) delay(10);
         }
       }
 
@@ -546,6 +547,7 @@ void sigkillLoop() {
         }
         needsRedraw = true;
         lastButtonPress = now;
+        while (digitalRead(BUTTON_PIN_LEFT) == LOW) delay(10);
       }
       break;
   }

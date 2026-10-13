@@ -99,7 +99,7 @@ static void process_scan_result(esp_ble_gap_cb_param_t *scan_result) {
 
     for (size_t i = 0; i < axonDevices.size(); i++) {
         if (strcmp(axonDevices[i].address, addrStr) == 0) {
-            axonDevices[i].rssi = scan_result->scan_rst.rssi;
+            axonDevices[i].rssi = (int8_t)(((int)axonDevices[i].rssi * 3 + (int)scan_result->scan_rst.rssi) / 4);
             axonDevices[i].lastSeen = millis();
             
             uint8_t adv_name_len = 0;
@@ -230,7 +230,7 @@ void axonDetectorSetup() {
     snprintf(countStr, sizeof(countStr), "%d/%d devices", 0, MAX_DEVICES);
     u8g2.drawStr(0, 35, countStr);
     u8g2.setFont(u8g2_font_5x8_tr);
-    u8g2.drawStr(0, 60, "Press SEL to exit");
+    u8g2.drawStr(0, 60, "L=Back");
     u8g2.sendBuffer();
     displayMirrorSend(u8g2);
 
@@ -280,7 +280,7 @@ void axonDetectorLoop() {
             }
 
             u8g2.setFont(u8g2_font_5x8_tr);
-            u8g2.drawStr(0, 62, "Press SEL to exit");
+            u8g2.drawStr(0, 62, "L=Back");
 
             u8g2.sendBuffer();
             displayMirrorSend(u8g2);
@@ -343,7 +343,7 @@ void axonDetectorLoop() {
                 ++listStartIndex;
             lastButtonPress = now;
             needsRedraw = true;
-        } else if (!isDetailView && !isLocateMode && digitalRead(BTN_RIGHT) == LOW &&
+        } else if (!isDetailView && !isLocateMode && digitalRead(BTN_CENTER) == LOW &&
                    !axonDevices.empty()) {
             isDetailView = true;
             if (isScanning) {
@@ -352,7 +352,7 @@ void axonDetectorLoop() {
             }
             lastButtonPress = now;
             needsRedraw = true;
-        } else if (isDetailView && !isLocateMode && digitalRead(BTN_RIGHT) == LOW &&
+        } else if (isDetailView && !isLocateMode && digitalRead(BTN_CENTER) == LOW &&
                    !axonDevices.empty()) {
             isLocateMode = true;
             strncpy(locateTargetAddress, axonDevices[currentIndex].address, sizeof(locateTargetAddress) - 1);
@@ -373,6 +373,7 @@ void axonDetectorLoop() {
             }
             lastButtonPress = now;
             needsRedraw = true;
+            while (digitalRead(BTN_BACK) == LOW) delay(10);
         } else if (isDetailView && !isLocateMode && digitalRead(BTN_BACK) == LOW) {
             isDetailView = false;
             if (isScanning) {
@@ -381,6 +382,7 @@ void axonDetectorLoop() {
             }
             lastButtonPress = now;
             needsRedraw = true;
+            while (digitalRead(BTN_BACK) == LOW) delay(10);
         }
     }
 
@@ -439,7 +441,7 @@ void axonDetectorLoop() {
             u8g2.drawFrame(barX, barY, barWidth, barHeight);
 
             u8g2.setFont(u8g2_font_5x8_tr);
-            u8g2.drawStr(0, 62, "Press SEL to exit");
+            u8g2.drawStr(0, 62, "L=Back");
         } else {
 
             u8g2.setFont(u8g2_font_6x10_tr);
@@ -450,7 +452,7 @@ void axonDetectorLoop() {
             unsigned long timeLeft = (scanInterval - (now - lastScanTime)) / 1000;
             snprintf(timeStr, sizeof(timeStr), "Scanning in %lus", timeLeft);
             u8g2.drawStr(0, 35, timeStr);
-            u8g2.drawStr(0, 50, "Press SEL to exit");
+            u8g2.drawStr(0, 50, "L=Back");
         }
     } else if (isLocateMode) {
         auto &dev = axonDevices[currentIndex];
@@ -504,7 +506,7 @@ void axonDetectorLoop() {
             }
         }
 
-        u8g2.drawStr(0, 62, "L=Back SEL=Exit");
+        u8g2.drawStr(0, 62, "L=Back");
     } else if (isDetailView && !axonDevices.empty() && currentIndex >= 0 && currentIndex < (int)axonDevices.size()) {
         u8g2.setFont(u8g2_font_5x8_tr);
         auto &dev = axonDevices[currentIndex];
@@ -527,7 +529,7 @@ void axonDetectorLoop() {
         snprintf(buf, sizeof(buf), "Age: %lus", (millis() - dev.lastSeen) / 1000);
         u8g2.drawStr(0, 40, buf);
 
-        u8g2.drawStr(0, 60, "L=Back SEL=Exit R=Locate");
+        u8g2.drawStr(0, 60, "L=Back SEL=Locate");
     } else {
         u8g2.setFont(u8g2_font_6x10_tr);
         char header[32];

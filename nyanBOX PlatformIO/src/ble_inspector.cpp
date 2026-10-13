@@ -27,6 +27,7 @@ extern U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2;
 #define BTN_DOWN  BUTTON_PIN_DOWN
 #define BTN_RIGHT BUTTON_PIN_RIGHT
 #define BTN_BACK  BUTTON_PIN_LEFT
+#define BTN_CENTER BUTTON_PIN_CENTER
 
 std::vector<BLEDevice> bleInspectorDevices;
 
@@ -468,7 +469,7 @@ static void process_scan_result(esp_ble_gap_cb_param_t* sr) {
 
     for (auto& dev : bleInspectorDevices) {
         if (strcmp(dev.address, addrStr) != 0) continue;
-        dev.rssi = sr->scan_rst.rssi;
+        dev.rssi = (int8_t)(((int)dev.rssi * 3 + (int)sr->scan_rst.rssi) / 4);
         dev.lastSeen = millis();
         dev.advType = sr->scan_rst.ble_evt_type;
         dev.addrType = sr->scan_rst.ble_addr_type;
@@ -486,7 +487,7 @@ static void process_scan_result(esp_ble_gap_cb_param_t* sr) {
     strncpy(dev.address, addrStr, 17);
     dev.address[17] = '\0';
     memcpy(dev.bdAddr, bda, 6);
-    dev.rssi = sr->scan_rst.rssi;
+    dev.rssi = (int8_t)(((int)dev.rssi * 3 + (int)sr->scan_rst.rssi) / 4);
     dev.lastSeen = millis();
     dev.advType = sr->scan_rst.ble_evt_type;
     dev.addrType = sr->scan_rst.ble_addr_type;
@@ -554,7 +555,7 @@ static void drawDetail() {
     if (detailScrollOffset + VISIBLE < numRows)
         u8g2.drawTriangle(124, 58, 120, 52, 128, 52);
 
-    u8g2.drawStr(0, 60, "L=Back SEL=Exit R=Locate");
+    u8g2.drawStr(0, 60, "L=Back SEL=Locate");
     u8g2.sendBuffer();
     displayMirrorSend(u8g2);
 }
@@ -611,7 +612,7 @@ static void drawLocate() {
         else                  u8g2.drawFrame(x, y, bw, bh);
     }
 
-    u8g2.drawStr(0, 60, "L=Back SEL=Exit");
+    u8g2.drawStr(0, 60, "L=Back");
     u8g2.sendBuffer();
     displayMirrorSend(u8g2);
 }
@@ -637,7 +638,7 @@ void bleInspectorSetup() {
     u8g2.drawStr(0, 10, "BLE Inspector");
     u8g2.drawStr(0, 22, "Scanning for BLE...");
     u8g2.setFont(u8g2_font_5x8_tr);
-    u8g2.drawStr(0, 62, "Press SEL to exit");
+    u8g2.drawStr(0, 62, "L=Back");
     u8g2.sendBuffer();
     displayMirrorSend(u8g2);
 
@@ -650,6 +651,7 @@ void bleInspectorSetup() {
     pinMode(BTN_UP,    INPUT_PULLUP);
     pinMode(BTN_DOWN,  INPUT_PULLUP);
     pinMode(BTN_RIGHT, INPUT_PULLUP);
+    pinMode(BTN_CENTER, INPUT_PULLUP);
     pinMode(BTN_BACK,  INPUT_PULLUP);
 }
 
@@ -675,7 +677,7 @@ void bleInspectorLoop() {
             int fill = ((int)bleInspectorDevices.size() * (bw - 4)) / MAX_DEVICES;
             if (fill > 0) u8g2.drawBox(bx + 2, 44, fill, 6);
             u8g2.setFont(u8g2_font_5x8_tr);
-            u8g2.drawStr(0, 62, "Press SEL to exit");
+            u8g2.drawStr(0, 62, "L=Back");
             u8g2.sendBuffer();
             displayMirrorSend(u8g2);
         }
@@ -733,7 +735,7 @@ void bleInspectorLoop() {
                 detailScrollOffset++;
                 lastButtonPress = now;
                 needsRedraw = true;
-            } else if (digitalRead(BTN_RIGHT) == LOW && !bleInspectorDevices.empty()) {
+            } else if (digitalRead(BTN_CENTER) == LOW && !bleInspectorDevices.empty()) {
                 inspView = BLEINSP_LOCATE;
                 strncpy(locateTargetAddress, bleInspectorDevices[currentIndex].address,
                         sizeof(locateTargetAddress) - 1);
@@ -761,7 +763,7 @@ void bleInspectorLoop() {
                 if (currentIndex >= listStartIndex + 5) ++listStartIndex;
                 lastButtonPress = now;
                 needsRedraw = true;
-            } else if (digitalRead(BTN_RIGHT) == LOW && !bleInspectorDevices.empty()) {
+            } else if (digitalRead(BTN_CENTER) == LOW && !bleInspectorDevices.empty()) {
                 inspView = BLEINSP_DETAIL;
                 detailScrollOffset = 0;
                 buildDetailRows(bleInspectorDevices[currentIndex]);
@@ -819,7 +821,7 @@ void bleInspectorLoop() {
             u8g2.drawStr(0, 38, ts);
         }
         u8g2.setFont(u8g2_font_5x8_tr);
-        u8g2.drawStr(0, 60, "Press SEL to exit");
+        u8g2.drawStr(0, 60, "L=Back");
     } else {
         char header[32];
         snprintf(header, sizeof(header), "BLE Inspector: %d/%d",

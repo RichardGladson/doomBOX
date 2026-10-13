@@ -16,9 +16,9 @@
 // Button Pin Definitions
 #define BUTTON_PIN_UP      26
 #define BUTTON_PIN_DOWN    33
-#define BUTTON_PIN_CENTER  32  // Exit
-#define BUTTON_PIN_LEFT    25  // Back
-#define BUTTON_PIN_RIGHT   27  // Select
+#define BUTTON_PIN_CENTER  32  // Select = Start / Confirm / OK
+#define BUTTON_PIN_LEFT    25  // Back (previous menu); exits app at root
+#define BUTTON_PIN_RIGHT   27  // Rescan
 
 // Radio Pins (single NRF24 module)
 #define RADIO_CE_PIN_1      5

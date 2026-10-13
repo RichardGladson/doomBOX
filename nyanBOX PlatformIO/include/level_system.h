@@ -14,15 +14,23 @@
 
 #include <Arduino.h>
 
-void levelSystemSetup();
-void levelSystemLoop();
+// Uptime system (replaces leveling)
+void levelSystemSetup();   // init / load uptime from EEPROM
+void levelSystemLoop();    // draw uptime screen
+void displayLevelScreen(); // draw uptime screen
+
+// Total accumulated uptime in seconds (persisted)
+uint32_t getTotalUptimeSeconds();
+
+// Call periodically from main loop to accumulate and periodically save
+void updateUptimeTracking();
+
+// Stubs kept so existing call sites still compile (no-ops)
 void addXP(int amount);
 int getCurrentLevel();
 int getCurrentXP();
 int getXPForNextLevel();
-void displayLevelScreen();
 void resetXPData();
-// Raise XP so the player is at least this level (does not lower level)
 void setMinimumLevel(int level);
 
 #endif

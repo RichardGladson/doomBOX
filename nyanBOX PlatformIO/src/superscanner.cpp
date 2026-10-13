@@ -361,10 +361,16 @@ static void gapCallback(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *pa
   switch (event) {
     case ESP_GAP_BLE_SCAN_PARAM_SET_COMPLETE_EVT:
       esp_ble_gap_start_scanning(0);  // continuous
-      scanning = true;
+      if (!scanning) {
+        scanning = true;
+        needsRedraw = true;
+      }
       break;
     case ESP_GAP_BLE_SCAN_START_COMPLETE_EVT:
-      scanning = true;
+      if (!scanning) {
+        scanning = true;
+        needsRedraw = true;
+      }
       break;
     case ESP_GAP_BLE_SCAN_RESULT_EVT:
       if (param->scan_rst.search_evt == ESP_GAP_SEARCH_INQ_RES_EVT) {
@@ -372,7 +378,10 @@ static void gapCallback(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *pa
       }
       break;
     case ESP_GAP_BLE_SCAN_STOP_COMPLETE_EVT:
-      scanning = false;
+      if (scanning) {
+        scanning = false;
+        needsRedraw = true;
+      }
       break;
     default:
       break;
@@ -438,6 +447,10 @@ static void startBleScan() {
     esp_ble_gap_register_callback(gapCallback);
     bleReady = true;
   }
+  // Optimistically mark as scanning so UI doesn't stick on "restarting..."
+  // while waiting for the async GAP callback.
+  scanning = true;
+  needsRedraw = true;
   esp_ble_gap_set_scan_params(&ble_scan_params);
   lastBleRestart = millis();
 }
@@ -485,7 +498,7 @@ static void drawScanScreen() {
 
   // Scanning indicator
   u8g2.setFont(u8g2_font_4x6_tr);
-  u8g2.drawStr(0, 16, scanning ? "scanning..." : "restarting...");
+  u8g2.drawStr(0, 16, scanning ? "scanning..." : "starting...");
 
   u8g2.setFont(u8g2_font_5x8_tr);
   int visible = 5;

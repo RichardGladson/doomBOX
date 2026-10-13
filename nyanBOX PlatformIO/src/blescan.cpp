@@ -25,6 +25,7 @@ extern U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2;
 #define BTN_DOWN BUTTON_PIN_DOWN
 #define BTN_RIGHT BUTTON_PIN_RIGHT
 #define BTN_BACK BUTTON_PIN_LEFT
+#define BTN_CENTER BUTTON_PIN_CENTER
 
 std::vector<BLEDeviceData> bleDevices;
 
@@ -99,7 +100,7 @@ static void process_scan_result(esp_ble_gap_cb_param_t *scan_result) {
 
     for (size_t i = 0; i < bleDevices.size(); i++) {
         if (strcmp(bleDevices[i].address, addrStr) == 0) {
-            bleDevices[i].rssi = scan_result->scan_rst.rssi;
+            bleDevices[i].rssi = (int8_t)(((int)bleDevices[i].rssi * 3 + (int)scan_result->scan_rst.rssi) / 4);
             bleDevices[i].lastSeen = millis();
 
             memcpy(bleDevices[i].bdAddr, bda, 6);
@@ -274,7 +275,7 @@ void blescanSetup() {
     snprintf(countStr, sizeof(countStr), "%d/%d devices", 0, MAX_DEVICES);
     u8g2.drawStr(0, 35, countStr);
     u8g2.setFont(u8g2_font_5x8_tr);
-    u8g2.drawStr(0, 60, "Press SEL to exit");
+    u8g2.drawStr(0, 60, "L=Back");
     u8g2.sendBuffer();
     displayMirrorSend(u8g2);
 
@@ -288,6 +289,7 @@ void blescanSetup() {
     pinMode(BTN_UP, INPUT_PULLUP);
     pinMode(BTN_DOWN, INPUT_PULLUP);
     pinMode(BTN_RIGHT, INPUT_PULLUP);
+    pinMode(BTN_CENTER, INPUT_PULLUP);
     pinMode(BTN_BACK, INPUT_PULLUP);
 }
 
@@ -323,7 +325,7 @@ void blescanLoop() {
             }
 
             u8g2.setFont(u8g2_font_5x8_tr);
-            u8g2.drawStr(0, 62, "Press SEL to exit");
+            u8g2.drawStr(0, 62, "L=Back");
 
             u8g2.sendBuffer();
             displayMirrorSend(u8g2);
@@ -386,7 +388,7 @@ void blescanLoop() {
                 ++listStartIndex;
             lastButtonPress = now;
             needsRedraw = true;
-        } else if (!isDetailView && !isLocateMode && digitalRead(BTN_RIGHT) == LOW &&
+        } else if (!isDetailView && !isLocateMode && digitalRead(BTN_CENTER) == LOW &&
                    !bleDevices.empty()) {
             isDetailView = true;
             if (isScanning) {
@@ -395,7 +397,7 @@ void blescanLoop() {
             }
             lastButtonPress = now;
             needsRedraw = true;
-        } else if (isDetailView && !isLocateMode && digitalRead(BTN_RIGHT) == LOW &&
+        } else if (isDetailView && !isLocateMode && digitalRead(BTN_CENTER) == LOW &&
                    !bleDevices.empty()) {
             isLocateMode = true;
             strncpy(locateTargetAddress, bleDevices[currentIndex].address, sizeof(locateTargetAddress) - 1);
@@ -416,6 +418,7 @@ void blescanLoop() {
             }
             lastButtonPress = now;
             needsRedraw = true;
+            while (digitalRead(BTN_BACK) == LOW) delay(10);
         } else if (isDetailView && !isLocateMode && digitalRead(BTN_BACK) == LOW) {
             isDetailView = false;
             if (isScanning) {
@@ -424,6 +427,7 @@ void blescanLoop() {
             }
             lastButtonPress = now;
             needsRedraw = true;
+            while (digitalRead(BTN_BACK) == LOW) delay(10);
         }
     }
 
@@ -482,7 +486,7 @@ void blescanLoop() {
             u8g2.drawFrame(barX, barY, barWidth, barHeight);
 
             u8g2.setFont(u8g2_font_5x8_tr);
-            u8g2.drawStr(0, 62, "Press SEL to exit");
+            u8g2.drawStr(0, 62, "L=Back");
         } else {
             u8g2.setFont(u8g2_font_6x10_tr);
             u8g2.drawStr(0, 10, "No devices found");
@@ -491,7 +495,7 @@ void blescanLoop() {
             unsigned long timeLeft = (scanInterval - (now - lastScanTime)) / 1000;
             snprintf(timeStr, sizeof(timeStr), "Scanning in %lus", timeLeft);
             u8g2.drawStr(0, 30, timeStr);
-            u8g2.drawStr(0, 45, "Press SEL to exit");
+            u8g2.drawStr(0, 45, "L=Back");
         }
     } else if (isLocateMode) {
         auto &dev = bleDevices[currentIndex];
@@ -545,7 +549,7 @@ void blescanLoop() {
             }
         }
 
-        u8g2.drawStr(0, 62, "L=Back SEL=Exit");
+        u8g2.drawStr(0, 62, "L=Back");
     } else if (isDetailView) {
         auto &dev = bleDevices[currentIndex];
         u8g2.setFont(u8g2_font_5x8_tr);
@@ -562,7 +566,7 @@ void blescanLoop() {
         u8g2.drawStr(0, 30, buf);
         snprintf(buf, sizeof(buf), "Age: %lus", (millis() - dev.lastSeen) / 1000);
         u8g2.drawStr(0, 40, buf);
-        u8g2.drawStr(0, 60, "L=Back SEL=Exit R=Locate");
+        u8g2.drawStr(0, 60, "L=Back SEL=Locate");
     } else {
         u8g2.setFont(u8g2_font_6x10_tr);
         char header[32];

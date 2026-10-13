@@ -22,7 +22,7 @@ extern U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2;
 
 #define BTN_UP BUTTON_PIN_UP
 #define BTN_DOWN BUTTON_PIN_DOWN
-#define BTN_SELECT BUTTON_PIN_RIGHT
+#define BTN_SELECT BUTTON_PIN_CENTER
 #define BTN_BACK BUTTON_PIN_LEFT
 
 struct PwnagotchiData {
@@ -121,7 +121,7 @@ void IRAM_ATTR pwnagotchiSnifferCallback(void *buf, wifi_promiscuous_pkt_type_t 
       e.deauth = jsDeauth;
       e.uptime = jsUptime;
       e.channel = ch;
-      e.rssi = rssi;
+      e.rssi = (int8_t)(((int)e.rssi * 3 + (int)rssi) / 4);
       needsRedraw = true;
       return;
     }
@@ -215,6 +215,7 @@ void pwnagotchiDetectorLoop() {
       isDetailView = false;
       lastButtonPress = now;
       needsRedraw = true;
+            while (digitalRead(BTN_BACK) == LOW) delay(10);
     }
   }
 
@@ -266,7 +267,7 @@ void pwnagotchiDetectorLoop() {
     u8g2.setFont(u8g2_font_6x10_tr);
     u8g2.drawStr(0, 10, "Scanning for");
     u8g2.drawStr(0, 20, "Pwnagotchis...");
-    u8g2.drawStr(0, 45, "Press SEL to stop");
+    u8g2.drawStr(0, 45, "Press LEFT to stop");
   } else if (isLocateMode) {
     if (currentIndex >= 0 && currentIndex < (int)pwnagotchi.size()) {
       auto &e = pwnagotchi[currentIndex];
@@ -319,7 +320,7 @@ void pwnagotchiDetectorLoop() {
         }
       }
 
-      u8g2.drawStr(0, 62, "L=Back SEL=Exit");
+      u8g2.drawStr(0, 62, "L=Back");
     } else {
       isLocateMode = false;
     }
@@ -346,7 +347,7 @@ void pwnagotchiDetectorLoop() {
       String uptimeLine = "Uptime: " + String(e.uptime / 60) + "min";
       u8g2.drawStr(0, 50, uptimeLine.c_str());
 
-      u8g2.drawStr(0, 60, "L=Back SEL=Exit R=Locate");
+      u8g2.drawStr(0, 60, "L=Back SEL=Locate");
     } else {
       isDetailView = false;
     }

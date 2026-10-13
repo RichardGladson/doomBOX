@@ -202,7 +202,7 @@ void renderDeauthStats() {
     }
 
     u8g2.setFont(u8g2_font_4x6_tr);
-    const char* instruction = "LEFT=Mode  SEL=Exit";
+    const char* instruction = "LEFT=Mode  L=Back";
     int instrWidth = u8g2.getUTF8Width(instruction);
     u8g2.drawStr((128 - instrWidth) / 2, 61, instruction);
 

@@ -200,7 +200,7 @@ void drawScanning() {
     }
 
     u8g2.setFont(u8g2_font_5x8_tr);
-    u8g2.drawStr(0, 60, "Press SEL to exit");
+    u8g2.drawStr(0, 60, "L=Back");
     u8g2.sendBuffer();
     displayMirrorSend(u8g2);
 }
@@ -212,7 +212,7 @@ void drawMenu() {
     u8g2.drawStr(0, 28, menuSelection == 0 ? "> All networks" : "  All networks");
     u8g2.drawStr(0, 44, menuSelection == 1 ? "> Single AP" : "  Single AP");
     u8g2.setFont(u8g2_font_5x8_tr);
-    u8g2.drawStr(0, 62, "U/D=Move R=OK SEL=Exit");
+    u8g2.drawStr(0, 62, "U/D=Move SEL=OK R=Rescan");
     u8g2.sendBuffer();
     displayMirrorSend(u8g2);
 }
@@ -252,7 +252,7 @@ void drawAll() {
     }
 
     u8g2.setFont(u8g2_font_5x8_tr);
-    u8g2.drawStr(0, 62, "L=Back SEL=Exit");
+    u8g2.drawStr(0, 62, "SEL=OK R=Rescan L=Back");
     u8g2.sendBuffer();
     displayMirrorSend(u8g2);
 }
@@ -281,7 +281,7 @@ void drawList() {
         u8g2.drawStr(0, 30, "No APs found");
     }
     u8g2.setFont(u8g2_font_5x8_tr);
-    u8g2.drawStr(0, 62, "U/D=Scroll R=Start L=Back");
+    u8g2.drawStr(0, 62, "U/D=Scroll SEL=Start L=Back");
     u8g2.sendBuffer();
     displayMirrorSend(u8g2);
 }
@@ -305,7 +305,7 @@ void drawDeauthSingle() {
     maskMAC(mac, maskedMAC);
     u8g2.drawStr(0, 44, maskedMAC);
     u8g2.setFont(u8g2_font_5x8_tr);
-    u8g2.drawStr(0, 62, "L=Stop & Back SEL=Exit");
+    u8g2.drawStr(0, 62, "L=Back");
     u8g2.sendBuffer();
     displayMirrorSend(u8g2);
 }
@@ -319,11 +319,12 @@ void deauthSetup() {
     pinMode(BTN_DOWN, INPUT_PULLUP);
     pinMode(BTN_BACK, INPUT_PULLUP);
     pinMode(BTN_RIGHT, INPUT_PULLUP);
+    pinMode(BUTTON_PIN_CENTER, INPUT_PULLUP);
 
     currentMode = MODE_MENU;
     menuSelection = 0;
     apIndex = 0;
-    apCount = 0;
+    // Keep existing apList if we already scanned this session
     lastScanTime = 0;
     lastDeauthTime = 0;
     scanInProgress = false;
@@ -336,8 +337,10 @@ void deauthSetup() {
     lastScanCount = 0;
     lastScanUpdate = 0;
 
-    startScan();
-    lastScanTime = millis();
+    if (apCount == 0) {
+        startScan();
+        lastScanTime = millis();
+    }
 }
 
 void deauthLoop() {
@@ -367,17 +370,13 @@ void deauthLoop() {
         return;
     }
 
-    if (now - lastScanTime >= SCAN_INTERVAL &&
-        currentMode != MODE_DEAUTH_SINGLE && !scanInProgress) {
-        startScan();
-        lastScanTime = now;
-        return;
-    }
+    // RIGHT = rescan, SELECT = start/OK, LEFT = back (exit at root via runApp)
 
-    bool up = digitalRead(BTN_UP) == LOW;
-    bool down = digitalRead(BTN_DOWN) == LOW;
-    bool left = digitalRead(BTN_BACK) == LOW;
-    bool right = digitalRead(BTN_RIGHT) == LOW;
+    bool up     = digitalRead(BTN_UP) == LOW;
+    bool down   = digitalRead(BTN_DOWN) == LOW;
+    bool left   = digitalRead(BTN_BACK) == LOW;
+    bool right  = digitalRead(BTN_RIGHT) == LOW;
+    bool select = digitalRead(BUTTON_PIN_CENTER) == LOW;
 
     switch (currentMode) {
     case MODE_MENU:
@@ -386,18 +385,25 @@ void deauthLoop() {
             needsRedraw = true;
             delay(200);
         }
-        if (right) {
+        if (select) {
             currentMode = (menuSelection == 0 ? MODE_ALL : MODE_LIST);
             needsRedraw = true;
             delay(200);
         }
+        if (right && !scanInProgress) {
+            startScan();
+            lastScanTime = now;
+            delay(200);
+        }
+        // LEFT at root → runApp exits
         break;
 
     case MODE_ALL:
         if (left) {
             currentMode = MODE_MENU;
             needsRedraw = true;
-            delay(200);
+            while (digitalRead(BTN_BACK) == LOW) delay(10);
+            delay(50);
         }
         break;
 
@@ -412,15 +418,23 @@ void deauthLoop() {
             needsRedraw = true;
             delay(200);
         }
-        if (right && apCount) {
+        if (select && apCount) {
             currentMode = MODE_DEAUTH_SINGLE;
             needsRedraw = true;
+            delay(200);
+        }
+        if (right) {
+            if (!scanInProgress) {
+                startScan();
+                lastScanTime = now;
+            }
             delay(200);
         }
         if (left) {
             currentMode = MODE_MENU;
             needsRedraw = true;
-            delay(200);
+            while (digitalRead(BTN_BACK) == LOW) delay(10);
+            delay(50);
         }
         break;
 
@@ -428,7 +442,8 @@ void deauthLoop() {
         if (left) {
             currentMode = MODE_LIST;
             needsRedraw = true;
-            delay(200);
+            while (digitalRead(BTN_BACK) == LOW) delay(10);
+            delay(50);
         }
         break;
 

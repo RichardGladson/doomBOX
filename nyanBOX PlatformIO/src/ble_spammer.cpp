@@ -179,7 +179,7 @@ static void drawBleSpamMenu() {
     u8g2.drawStr(0, 42, menuSelection == 2 ? "> Custom" : "  Custom");
     u8g2.drawStr(0, 52, menuSelection == 3 ? "> All" : "  All");
     u8g2.setFont(u8g2_font_5x8_tr);
-    u8g2.drawStr(0, 62, "U/D=Move R=Start SEL=Exit");
+    u8g2.drawStr(0, 62, "U/D=Move SEL=Start L=Back");
     u8g2.sendBuffer();
   displayMirrorSend(u8g2);
 }
@@ -195,7 +195,7 @@ static void drawActiveSpam(const char* modeName, const char* extraInfo = nullptr
         u8g2.drawStr(0, 28, "Status: Active");
     }
     u8g2.setFont(u8g2_font_5x8_tr);
-    u8g2.drawStr(0, 62, "L=Back SEL=Exit");
+    u8g2.drawStr(0, 62, "L=Back L=Back");
     u8g2.sendBuffer();
   displayMirrorSend(u8g2);
 }
@@ -298,7 +298,7 @@ void bleSpamLoop() {
     bool up = digitalRead(BUTTON_PIN_UP) == LOW;
     bool down = digitalRead(BUTTON_PIN_DOWN) == LOW;
     bool left = digitalRead(BUTTON_PIN_LEFT) == LOW;
-    bool right = digitalRead(BUTTON_PIN_RIGHT) == LOW;
+    bool right = digitalRead(BUTTON_PIN_CENTER) == LOW;
 
     if (bleSpamMode != previousMode) {
         needsRedraw = true;
