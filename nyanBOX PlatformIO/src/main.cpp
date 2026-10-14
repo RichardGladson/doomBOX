@@ -1,7 +1,5 @@
 /*
     doomBOX
-    https://github.com/jbohack/nyanBOX
-    Copyright (c) 2026 jbohack
 
     Licensed under the MIT License
     https://opensource.org/licenses/MIT
