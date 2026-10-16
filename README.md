@@ -3,7 +3,7 @@
 A compact ESP32 wireless toolkit for security research and RF survey work.  
 Forked from [nyanBOX](https://github.com/jbohack/nyanBOX) by Nyan Devices.
 
-> 🚧 **Work in progress** — features and hardware support are still evolving. Expect rough edges. Bug reports and PRs are welcome.
+
 
 **Repository:** [github.com/richardGladson/doomBOX](https://github.com/richardGladson/doomBOX)
 
