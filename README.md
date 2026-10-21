@@ -1,7 +1,9 @@
-# doomBOX 💀📡
+# doomBOX
+<img width="1976" height="796" alt="doomBOX banner" src="doomBOX banner.png" />
 
-A compact ESP32 wireless toolkit for security research and RF survey work.  
-Forked from [nyanBOX](https://github.com/jbohack/nyanBOX) by Nyan Devices.
+A compact ESP32 wireless toolkit for security research and Wi-Fi, Bluetooth and RFID related work.  
+
+Forked from [nyanBOX](https://github.com/jbohack/nyanBOX) by Nyan Devices, itself originally forked from [nRFbox](https://github.com/cifertech/nrfbox) by CiferTech.
 
 
 
@@ -187,6 +189,6 @@ doomBOX is for **education, security research, and authorized testing only**. Do
 
 ## License
 
-MIT License — see [LICENSE](LICENSE).
+GNU GPL-3.0 License — see [LICENSE](LICENSE).
 
-This project is a derivative of nyanBOX (MIT). Keeping **MIT** preserves compatibility with upstream and with the libraries used (U8g2, NeoPixel, ArduinoJson, MFRC522), which are also permissively licensed. Original copyright notices in source headers must be retained.
+This project is a derivative of nyanBOX (MIT). Changing the license to GPL from the original MIT ensures that all derivative firmware is distrubuted and used properly. Original copyright notices in source headers must be retained.
