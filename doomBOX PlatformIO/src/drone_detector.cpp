@@ -1,19 +1,13 @@
 /*
-    nyanBOX by Nyan Devices
-    https://github.com/jbohack/nyanBOX
-    Copyright (c) 2025 jbohack
+    doomBOX by Richard Gladson
+    https://github.com/RichardGladson/doomBOX
+    Copyright (c) 2026 Richard Gladson
 
-    This file includes code derived from opendroneid-core-c
-    https://github.com/opendroneid/opendroneid-core-c
+    Licensed under the GNU General Public License v3.0
+    https://www.gnu.org/licenses/gpl-3.0.html
 
-    Licensed under the Apache License, Version 2.0
-    http://www.apache.org/licenses/LICENSE-2.0
-
-    Modifications have been made to the original code.
-
-    SPDX-License-Identifier: MIT AND Apache-2.0
+    SPDX-License-Identifier: GPL-3.0-only
 */
-
 #include "../include/drone_detector.h"
 #include "../include/sleep_manager.h"
 #include "../include/display_mirror.h"

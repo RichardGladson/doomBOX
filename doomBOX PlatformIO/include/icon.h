@@ -1,14 +1,13 @@
 /*
-    nyanBOX by Nyan Devices
-    https://github.com/jbohack/nyanBOX
-    Copyright (c) 2025 jbohack
+    doomBOX by Richard Gladson
+    https://github.com/RichardGladson/doomBOX
+    Copyright (c) 2026 Richard Gladson
 
-    Licensed under the MIT License
-    https://opensource.org/licenses/MIT
+    Licensed under the GNU General Public License v3.0
+    https://www.gnu.org/licenses/gpl-3.0.html
 
-    SPDX-License-Identifier: MIT
+    SPDX-License-Identifier: GPL-3.0-only
 */
-
 // 'apple', 16x16px
 const unsigned char bitmap_icon_apple [] PROGMEM = {
   0x00, 0x00, 0x00, 0x06, 0x00, 0x07, 0x00, 0x03, 0x00, 0x00, 0x70, 0x0e, 0xf8, 0x0f, 0xf8, 0x07, 

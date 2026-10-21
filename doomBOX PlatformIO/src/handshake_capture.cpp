@@ -1,15 +1,13 @@
 /*
-    doomBOX / nyanBOX
-    EAPOL / PMKID handshake capture
-    Full-frame aware, robust parser, honest UI, serial export
-    Copyright (c) 2026 jbohack
+    doomBOX by Richard Gladson
+    https://github.com/RichardGladson/doomBOX
+    Copyright (c) 2026 Richard Gladson
 
-    Licensed under the MIT License
-    https://opensource.org/licenses/MIT
+    Licensed under the GNU General Public License v3.0
+    https://www.gnu.org/licenses/gpl-3.0.html
 
-    SPDX-License-Identifier: MIT
+    SPDX-License-Identifier: GPL-3.0-only
 */
-
 #include "../include/handshake_capture.h"
 #include "../include/radio_manager.h"
 #include "../include/sleep_manager.h"
