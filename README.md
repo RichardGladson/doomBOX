@@ -15,13 +15,13 @@ doomBOX is the **controller / UI node** of a two-device system:
 
 | Role | Repo | Hardware focus |
 |------|------|----------------|
-| **doomBOX (this repo)** | [richardGladson/doomBOX](https://github.com/richardGladson/doomBOX) | ESP32 + OLED UI, Wi‑Fi/BLE tools, RFID, optional single nRF24 (SigKill) |
+| **doomBOX (this repo)** | [richardGladson/doomBOX](https://github.com/richardGladson/doomBOX) | ESP32 + OLED UI, Wi‑Fi/BLE tools, RFID |
 | **ESP32-Reaper** | [RichardGladson/ESP32-reaper](https://github.com/RichardGladson/ESP32-reaper) | ESP32-C3 + **3× nRF24L01** field radio, passive 2.4 GHz survey, ESP‑NOW slave |
 
 - **Standalone:** doomBOX runs all onboard Wi‑Fi / BLE / RFID tools without Reaper.
 - **With Reaper:** open the **Reaper** shortcut on the main menu to discover, pair, and command the remote triple-radio node over ESP‑NOW. Passive channel survey (BT / Wi‑Fi ranges) is offloaded to Reaper; results and status come back to the OLED.
 
-Historically this build was described as **Wraith** (no external nRF24 array). The firmware still supports an optional **single** nRF24 for SigKill. Full multi-radio spectrum work lives on Reaper.
+Full multi-radio spectrum work lives on Reaper. This firmware has no onboard nRF24 support.
 
 ---
 
@@ -33,8 +33,7 @@ Historically this build was described as **Wraith** (no external nRF24 array). T
 | Display | 0.96″ 128×64 OLED (SSD1306, I²C / U8g2) |
 | Buttons | Up, Down, Center (exit), Left (back), Right |
 | Status LED | NeoPixel / RGB (GPIO 14) |
-| RFID (optional) | MFRC522 on shared SPI |
-| nRF24 (optional) | Single module for SigKill only |
+| RFID (optional) | MFRC522 on SPI |
 
 ### Pin map (`pindefs.h`)
 
@@ -45,12 +44,10 @@ Historically this build was described as **Wraith** (no external nRF24 array). T
 | Button Center (SEL / exit) | 32 |
 | Button Left (back) | 25 |
 | Button Right | 27 |
-| nRF24 CE | 5 |
-| nRF24 CSN | 17 |
 | NeoPixel | 14 |
 | RFID SS | 21 |
 | RFID RST | 22 |
-| SPI (RFID / nRF24) | SCK 18, MISO 19, MOSI 23 |
+| SPI (RFID) | SCK 18, MISO 19, MOSI 23 |
 
 ---
 
@@ -78,14 +75,13 @@ Historically this build was described as **Wraith** (no external nRF24 array). T
 - BLE spammer, Swift Pair spam, Sour Apple, Sour Droid, BLE spoofer
 
 ### 📡 Other / RF-related
-- **SigKill** — nRF24 carrier / protocol hop modes *(needs local nRF24; fails cleanly if absent)*
 - Superscanner
 - Drone detector (Remote ID) & drone spoofer (ODID)
 - Flock Safety detector
 - Device Scout
 - **Reaper link** — ESP‑NOW control of [ESP32-Reaper](https://github.com/RichardGladson/ESP32-reaper) for multi-radio passive survey
 
-> nRF24 spectrum **Scanner** / **Analyzer** UI entries are removed from the Other menu; use **Reaper → BT Survey / WiFi Survey** when a Reaper node is paired.
+> Use **Reaper → BT Survey / WiFi Survey** when a Reaper node is paired for spectrum work.
 
 ### 🏷️ RFID
 - MFRC522 tools (main menu, right column)
@@ -136,7 +132,6 @@ pio device monitor
 **Environment:** `doomBOX` · board `esp32dev` · partition `huge_app.csv`
 
 **Libraries** (from `platformio.ini`):
-- `nrf24/RF24`
 - `olikraus/U8g2`
 - `adafruit/Adafruit NeoPixel`
 - `bblanchon/ArduinoJson`
@@ -153,7 +148,7 @@ nyanBOX PlatformIO/
   src/              # main.cpp + one module per tool
 ```
 
-Notable modules: `wifiscan`, `deauth`, `handshake_capture`, `evil_portal`, `blescan`, `ble_*`, detectors, `sigkill`, `radio_manager`, `rfid`, `reaper_manager` / `reaper_ui` / `reaper_protocol`.
+Notable modules: `wifiscan`, `deauth`, `handshake_capture`, `evil_portal`, `blescan`, `ble_*`, detectors, `radio_manager`, `rfid`, `reaper_manager` / `reaper_ui` / `reaper_protocol`.
 
 ---
 
@@ -177,8 +172,7 @@ Flash Reaper, power it near doomBOX, open **Reaper** on the main menu, and wait 
 **Not carried over (examples):** camera detector/deauther, passive 802.11 CSV monitor, FindMy/HID beepers, KARR, iBeacon tools, LE gear detector, jam detector, battery pack / enclosure, triple-nRF24 on the same board.
 
 **doomBOX-specific:**
-- Wraith-style focus on onboard Wi‑Fi/BLE + OLED
-- Optional single nRF24 for SigKill
+- Focus on onboard Wi‑Fi/BLE + OLED (no onboard nRF24)
 - RFID column
 - **ESP‑NOW Reaper integration** for remote multi-radio survey
 - Snake easter egg, level system, legal disclaimer flow
@@ -195,4 +189,4 @@ doomBOX is for **education, security research, and authorized testing only**. Do
 
 MIT License — see [LICENSE](LICENSE).
 
-This project is a derivative of nyanBOX (MIT). Keeping **MIT** preserves compatibility with upstream and with the libraries used (RF24, U8g2, NeoPixel, ArduinoJson, MFRC522), which are also permissively licensed. Original copyright notices in source headers must be retained.
+This project is a derivative of nyanBOX (MIT). Keeping **MIT** preserves compatibility with upstream and with the libraries used (U8g2, NeoPixel, ArduinoJson, MFRC522), which are also permissively licensed. Original copyright notices in source headers must be retained.

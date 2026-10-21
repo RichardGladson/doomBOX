@@ -16,8 +16,8 @@
 #include <U8g2lib.h>
 #include "pindefs.h"
 
-// RC522 pins (shared SPI bus: SCK=18, MISO=19, MOSI=23)
-// Choose free GPIOs that do not conflict with buttons / NRF24 / NeoPixel
+// RC522 pins (SPI bus: SCK=18, MISO=19, MOSI=23)
+// Choose free GPIOs that do not conflict with buttons / NeoPixel
 #ifndef RFID_SS_PIN
 #define RFID_SS_PIN   21
 #endif

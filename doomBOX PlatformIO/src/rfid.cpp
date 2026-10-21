@@ -30,7 +30,6 @@
 #include "../include/level_system.h"
 #include "../include/neopixel.h"
 #include "../include/setting.h"
-#include "../include/radio_manager.h"
 #include "../include/pindefs.h"
 
 #include <SPI.h>
@@ -290,11 +289,7 @@ static void uidToStr(const uint8_t* uid, uint8_t len, char* buf, size_t buflen) 
 // Reader init / low-level
 // ---------------------------------------------------------------------------
 static bool initReader() {
-  // Ensure NRF24 is quiet and SPI is in a known state
-  nrf24PowerDown();
-  delay(5);
-
-  SPI.begin(18, 19, 23, -1);   // same bus as NRF24
+  SPI.begin(18, 19, 23, -1);
   SPI.setFrequency(4000000);   // 4 MHz safe for RC522
   SPI.setDataMode(SPI_MODE0);
   SPI.setBitOrder(MSBFIRST);
@@ -1472,7 +1467,6 @@ void rfidSetup() {
 
 void rfidCleanup() {
   haltReader();
-  nrf24PowerDown();   // leave bus clean
   stopBlinking();
 }
 

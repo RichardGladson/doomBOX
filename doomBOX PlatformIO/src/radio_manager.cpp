@@ -10,7 +10,6 @@
 */
 
 #include "../include/radio_manager.h"
-#include "../include/pindefs.h"
 
 #include "esp_wifi.h"
 #include "esp_netif.h"
@@ -18,88 +17,9 @@
 #include "esp_bt_main.h"
 #include "esp_gap_ble_api.h"
 #include <Arduino.h>
-#include <RF24.h>
 #include <SPI.h>
 
-extern RF24 radios[1];
-
 static bool classicBtMemReleased = false;
-
-// ---------------------------------------------------------------------------
-// Unified NRF24 SPI + chip bring-up (single module on CE=5, CSN=17)
-// ---------------------------------------------------------------------------
-void initNrf24Spi() {
-  // Explicit pin map. SS = -1 so the bus does not claim CSN (GPIO 17);
-  // RF24 / raw register code drive CSN themselves.
-  SPI.begin(18, 19, 23, -1);  // SCK, MISO, MOSI, SS
-  delay(20);
-  SPI.setDataMode(SPI_MODE0);
-  SPI.setFrequency(16000000);  // match known-good smoochiee jammer (16 MHz)
-  SPI.setBitOrder(MSBFIRST);
-
-  pinMode(RADIO_CE_PIN_1, OUTPUT);
-  pinMode(RADIO_CSN_PIN_1, OUTPUT);
-  digitalWrite(RADIO_CSN_PIN_1, HIGH);
-  digitalWrite(RADIO_CE_PIN_1, LOW);
-  delay(5);
-}
-
-bool nrf24Begin() {
-  initNrf24Spi();
-
-  // Soft reset path: power down any prior state, then re-init
-  radios[0].powerDown();
-  delay(10);
-
-  if (!radios[0].begin()) {
-    return false;
-  }
-  if (!radios[0].isChipConnected()) {
-    return false;
-  }
-
-  radios[0].setAutoAck(false);
-  radios[0].stopListening();
-  radios[0].setRetries(0, 0);
-  // Required for reliable startConstCarrier (smoochiee / RF24 const-carrier path)
-  radios[0].setPayloadSize(5);
-  radios[0].setAddressWidth(3);
-  radios[0].setPALevel(RF24_PA_MAX, true);
-  radios[0].setDataRate(RF24_2MBPS);
-  radios[0].setCRCLength(RF24_CRC_DISABLED);
-  return true;
-}
-
-void nrf24PowerDown() {
-  radios[0].powerDown();
-  digitalWrite(RADIO_CE_PIN_1, LOW);
-  digitalWrite(RADIO_CSN_PIN_1, HIGH);
-}
-
-void silenceEsp32Rf() {
-  // smoochiee FOR VSPI PIN.ino setup():
-  //   esp_bt_controller_deinit();
-  //   esp_wifi_stop();
-  //   esp_wifi_deinit();
-  // Bluedroid must be torn down before controller deinit on current IDF.
-  esp_wifi_set_promiscuous(false);
-
-  if (esp_bluedroid_get_status() == ESP_BLUEDROID_STATUS_ENABLED) {
-    esp_bluedroid_disable();
-  }
-  if (esp_bluedroid_get_status() != ESP_BLUEDROID_STATUS_UNINITIALIZED) {
-    esp_bluedroid_deinit();
-  }
-  if (esp_bt_controller_get_status() == ESP_BT_CONTROLLER_STATUS_ENABLED) {
-    esp_bt_controller_disable();
-  }
-  if (esp_bt_controller_get_status() != ESP_BT_CONTROLLER_STATUS_IDLE) {
-    esp_bt_controller_deinit();  // smoochiee: esp_bt_controller_deinit()
-  }
-
-  esp_wifi_stop();    // smoochiee
-  esp_wifi_deinit();  // smoochiee
-}
 
 bool initBLE() {
     if (esp_bt_controller_get_status() == ESP_BT_CONTROLLER_STATUS_IDLE) {
@@ -166,7 +86,6 @@ bool initWiFi(wifi_mode_t mode) {
 }
 
 void cleanupRadio() {
-    nrf24PowerDown();
     cleanupWiFi();
     cleanupBLE();
 }

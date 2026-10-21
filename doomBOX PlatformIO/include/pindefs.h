@@ -20,14 +20,10 @@
 #define BUTTON_PIN_LEFT    25  // Back
 #define BUTTON_PIN_RIGHT   27  // Select
 
-// Radio Pins (single NRF24 module)
-#define RADIO_CE_PIN_1      5
-#define RADIO_CSN_PIN_1    17
-
 // NeoPixel
 #define NEOPIXEL_PIN       14
 
-// RC522 RFID (shared SPI bus: SCK=18, MISO=19, MOSI=23)
+// RC522 RFID (SPI bus: SCK=18, MISO=19, MOSI=23)
 #define RFID_SS_PIN        21
 #define RFID_RST_PIN       22
 

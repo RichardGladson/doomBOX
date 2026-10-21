@@ -20,7 +20,6 @@
 #ifdef U8X8_HAVE_HW_I2C
 #include <Wire.h>
 #endif
-#include <RF24.h>
 
 #include "../include/icon.h"
 #include "../include/doombox_logo.h"
@@ -51,7 +50,6 @@
 #include "../include/beacon_spam.h"
 #include "../include/pwnagotchi_detector.h"
 #include "../include/pindefs.h"
-#include "../include/sigkill.h"
 #include "../include/about.h"
 #include "../include/pwnagotchi_spam.h"
 #include "../include/level_system.h"
@@ -71,10 +69,6 @@
 #include "../include/radio_manager.h"
 #include "../include/superscanner.h"
 #include "../include/rfid.h"
-
-RF24 radios[] = {
-  RF24(RADIO_CE_PIN_1, RADIO_CSN_PIN_1)
-};
 
 U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, U8X8_PIN_NONE);
 Adafruit_NeoPixel pixels(1, NEOPIXEL_PIN, NEO_GRB + NEO_KHZ800);
@@ -464,7 +458,7 @@ bool isReconApp(const char* appName) {
 }
 
 bool isDangerousApp(const char* appName) {
-  return strstr(appName, "SigKill") != nullptr;
+  return false;
 }
 
 bool isOffensiveApp(const char* appName) {
@@ -688,13 +682,11 @@ MenuItem bleMenu[] = {
 constexpr int BLE_MENU_SIZE = sizeof(bleMenu) / sizeof(bleMenu[0]);
 
 MenuItem otherMenu[] = {
-  { "SigKill",   nullptr, sigkillSetup,   sigkillLoop,   cleanupRadio },
   { "Superscanner", nullptr, superscannerSetup, superscannerLoop, superscannerCleanup },
   { "Drone Detector", nullptr, droneDetectorSetup, droneDetectorLoop, cleanupDroneDetector },
   { "Drone Spoofer", nullptr, droneSpooferSetup, droneSpooferLoop, cleanupDroneSpoofer },
   { "Flock Detector", nullptr, flockDetectorSetup, flockDetectorLoop, cleanupFlockDetector },
   { "Device Scout", nullptr, deviceScoutSetup, deviceScoutLoop, cleanupDeviceScout },
-  // Scanner & Analyzer offloaded to ESP32-Reaper via ESP-NOW (see Reaper menu)
   { "Setting",      nullptr, settingSetup,    settingLoop,    noCleanup },
   { "About",        nullptr, aboutSetup,      aboutLoop,      aboutCleanup },
   { "Back",         nullptr, nullptr,         nullptr,        noCleanup }
@@ -811,9 +803,6 @@ void setup() {
   pinMode(BUTTON_PIN_LEFT, INPUT_PULLUP);
 
   neopixelSetup();
-
-  // Unified single-module NRF24 bring-up
-  nrf24Begin();  // ignores result at boot; features re-init later
 
   EEPROM.begin(512);
   oledBrightness = EEPROM.read(1);
