@@ -125,7 +125,7 @@ Protocol: versioned binary packets (magic `0xDB`), heartbeats, mode/scan/stop/st
 **Toolchain:** [PlatformIO](https://platformio.org/)
 
 ```bash
-cd "nyanBOX PlatformIO"   # or your project root containing platformio.ini
+cd "doomBOX PlatformIO"   # or your project root containing platformio.ini
 pio run
 pio run -t upload
 pio device monitor
@@ -144,7 +144,7 @@ pio device monitor
 ## Project layout (high level)
 
 ```
-nyanBOX PlatformIO/
+doomBOX PlatformIO/
   platformio.ini
   include/          # headers (apps, pindefs, icons, reaper_*)
   src/              # main.cpp + one module per tool
