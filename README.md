@@ -5,9 +5,18 @@ A compact ESP32 wireless toolkit for security research and Wi-Fi, Bluetooth and 
 
 Forked from [nyanBOX](https://github.com/jbohack/nyanBOX) by Nyan Devices, itself originally forked from [nRFbox](https://github.com/cifertech/nrfbox) by CiferTech.
 
-
-
 **Repository:** [github.com/richardGladson/doomBOX](https://github.com/richardGladson/doomBOX)
+
+---
+## Acknowledgements & Licensing
+
+doomBOX is a derivative project built upon [nyanBOX](https://github.com/jbohack/nyanBOX) by **jbohack**. The original project provided the foundation for doomBOX, and its original authorship and contributions are acknowledged and respected.
+
+While doomBOX includes my own additions and modifications, it remains derived from nyanBOX. The original MIT licence and copyright notices are preserved in accordance with its terms.
+
+My modifications are licensed under the **GNU General Public License (GPL)**. This does not replace or revoke the original MIT licence applicable to the upstream code. The applicable licence terms depend on which portions of the code are being used or redistributed.
+
+Full credit for the original nyanBOX project belongs to its respective author(s).
 
 ---
 
