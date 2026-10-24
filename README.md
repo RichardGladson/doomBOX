@@ -1,11 +1,22 @@
-# doomBOX 💀📡
+# doomBOX
+<img width="1976" height="796" alt="doomBOX banner" src="doomBOX banner.png" />
 
-A compact ESP32 wireless toolkit for security research and RF survey work.  
-Forked from [nyanBOX](https://github.com/jbohack/nyanBOX) by Nyan Devices.
+A compact ESP32 wireless toolkit for security research and Wi-Fi, Bluetooth and RFID related work.  
 
-
+Forked from [nyanBOX](https://github.com/jbohack/nyanBOX) by Nyan Devices, itself originally forked from [nRFbox](https://github.com/cifertech/nrfbox) by CiferTech.
 
 **Repository:** [github.com/richardGladson/doomBOX](https://github.com/richardGladson/doomBOX)
+
+---
+## Acknowledgements & Licensing
+
+doomBOX is a derivative project built upon [nyanBOX](https://github.com/jbohack/nyanBOX) by **jbohack**. The original project provided the foundation for doomBOX, and its original authorship and contributions are acknowledged and respected.
+
+While doomBOX includes my own additions and modifications, it remains derived from nyanBOX. The original MIT licence and copyright notices are preserved in accordance with its terms.
+
+My modifications are licensed under the **GNU General Public License (GPL)**. This does not replace or revoke the original MIT licence applicable to the upstream code. The applicable licence terms depend on which portions of the code are being used or redistributed.
+
+Full credit for the original nyanBOX project belongs to its respective author(s).
 
 ---
 
@@ -123,7 +134,7 @@ Protocol: versioned binary packets (magic `0xDB`), heartbeats, mode/scan/stop/st
 **Toolchain:** [PlatformIO](https://platformio.org/)
 
 ```bash
-cd "nyanBOX PlatformIO"   # or your project root containing platformio.ini
+cd "doomBOX PlatformIO"   # or your project root containing platformio.ini
 pio run
 pio run -t upload
 pio device monitor
@@ -142,7 +153,7 @@ pio device monitor
 ## Project layout (high level)
 
 ```
-nyanBOX PlatformIO/
+doomBOX PlatformIO/
   platformio.ini
   include/          # headers (apps, pindefs, icons, reaper_*)
   src/              # main.cpp + one module per tool
@@ -187,6 +198,6 @@ doomBOX is for **education, security research, and authorized testing only**. Do
 
 ## License
 
-MIT License — see [LICENSE](LICENSE).
+GNU GPL-3.0 License — see [LICENSE](LICENSE).
 
-This project is a derivative of nyanBOX (MIT). Keeping **MIT** preserves compatibility with upstream and with the libraries used (U8g2, NeoPixel, ArduinoJson, MFRC522), which are also permissively licensed. Original copyright notices in source headers must be retained.
+This project is a derivative of nyanBOX (MIT). Changing the license to GPL from the original MIT ensures that all derivative firmware is distrubuted and used properly. Original copyright notices in source headers must be retained.
