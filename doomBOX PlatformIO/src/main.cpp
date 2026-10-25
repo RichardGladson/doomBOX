@@ -27,6 +27,7 @@
 #include "../include/neopixel.h"
 #include "../include/setting.h"
 
+#include "../include/camera_deauther.h"
 #include "../include/sourapple.h"
 #include "../include/reaper_ui.h"
 #include "../include/sourdroid.h"
@@ -655,6 +656,7 @@ MenuItem wifiMenu[] = {
   { "Pineapple Detector", nullptr, pineappleDetectorSetup, pineappleDetectorLoop, cleanupWiFi },
   { "Pwnagotchi Detector", nullptr, pwnagotchiDetectorSetup, pwnagotchiDetectorLoop, cleanupWiFi },
   { "Pwnagotchi Spam", nullptr, pwnagotchiSpamSetup,     pwnagotchiSpamLoop,     cleanupWiFi },
+  { "Camera Deauther ",  nullptr, cameraDeautherSetup, cameraDeautherLoop, cameraDeautherCleanup },
   { "Back",            nullptr, nullptr,                 nullptr,                noCleanup }
 };
 constexpr int WIFI_MENU_SIZE = sizeof(wifiMenu) / sizeof(wifiMenu[0]);
