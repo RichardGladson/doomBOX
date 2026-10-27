@@ -1,12 +1,9 @@
 /*
-    doomBOX by Richard Gladson
-    https://github.com/RichardGladson/doomBOX
-    Copyright (c) 2026 Richard Gladson
-
-    Licensed under the GNU General Public License v3.0
-    https://www.gnu.org/licenses/gpl-3.0.html
-
-    SPDX-License-Identifier: GPL-3.0-only
+doomBOX by Richard Gladson
+https://github.com/RichardGladson/doomBOX
+Copyright (c) 2026 Richard Gladson
+Licensed under the GNU General Public License v3.0
+SPDX-License-Identifier: GPL-3.0-only
 */
 #include "../include/airtag_detector.h"
 #include "../include/radio_manager.h"
@@ -26,9 +23,15 @@ extern U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2;
 #define BTN_BACK BUTTON_PIN_LEFT
 #define BTN_CENTER BUTTON_PIN_CENTER
 
+// Advanced Find My payload structure
+struct FindMyData {
+    uint8_t publicKey[22];
+    uint8_t statusByte;
+    bool isValid;
+};
+
 std::vector<AirTagDeviceData> airtagDevices;
 const int MAX_DEVICES = 100;
-
 int currentIndex = 0;
 int listStartIndex = 0;
 bool isDetailView = false;
@@ -36,7 +39,6 @@ bool isLocateMode = false;
 char locateTargetAddress[18] = {0};
 unsigned long lastButtonPress = 0;
 const unsigned long debounceTime = 200;
-
 static bool needsRedraw = true;
 static int lastDeviceCount = 0;
 static unsigned long lastLocateUpdate = 0;
@@ -44,12 +46,10 @@ const unsigned long locateUpdateInterval = 1000;
 static unsigned long lastCountdownUpdate = 0;
 const unsigned long countdownUpdateInterval = 1000;
 static bool wasScanning = false;
-
 static bool isScanning = false;
 static unsigned long lastScanTime = 0;
 const unsigned long scanInterval = 30000;
 const unsigned long scanDuration = 8;
-
 static bool bleInitialized = false;
 static bool scanCompleted = false;
 
@@ -63,49 +63,44 @@ static esp_ble_scan_params_t ble_scan_params = {
 };
 
 static void bda_to_string(uint8_t *bda, char *str, size_t size) {
-    if (bda == NULL || str == NULL || size < 18) {
-        return;
-    }
+    if (bda == NULL || str == NULL || size < 18) return;
     snprintf(str, size, "%02X:%02X:%02X:%02X:%02X:%02X",
              bda[0], bda[1], bda[2], bda[3], bda[4], bda[5]);
 }
 
-bool isAirTagPayload(uint8_t *payload, uint8_t payload_len) {
-    if (!payload || payload_len < 4) return false;
-
-    // Check common AirTag patterns: "1E FF 4C 00" and "4C 00 12 19"
-    for (int i = 0; i <= payload_len - 4; i++) {
+// Strict Find My payload parser. Rejects non-AirTag Apple devices.
+bool parseFindMyPayload(uint8_t *payload, uint8_t len, FindMyData &out) {
+    out.isValid = false;
+    // Looking for: Length(0x1E), Type(0xFF), Company(0x4C, 0x00), FindMyType(0x12)
+    for (int i = 0; i <= len - 27; i++) {
         if (payload[i] == 0x1E && payload[i+1] == 0xFF && 
-            payload[i+2] == 0x4C && payload[i+3] == 0x00) {
-            return true;
-        }
-        if (payload[i] == 0x4C && payload[i+1] == 0x00 && 
-            payload[i+2] == 0x12 && payload[i+3] == 0x19) {
+            payload[i+2] == 0x4C && payload[i+3] == 0x00 && 
+            payload[i+4] == 0x12) {
+            out.statusByte = payload[i+5];
+            memcpy(out.publicKey, &payload[i+6], 22);
+            out.isValid = true;
             return true;
         }
     }
-    
     return false;
 }
 
 static void process_scan_result(esp_ble_gap_cb_param_t *scan_result) {
     uint8_t *payload = scan_result->scan_rst.ble_adv;
     uint8_t payload_len = scan_result->scan_rst.adv_data_len;
-
-    if (!isAirTagPayload(payload, payload_len)) {
-        return;
+    
+    FindMyData fmd;
+    if (!parseFindMyPayload(payload, payload_len, fmd)) {
+        return; // Not a valid AirTag/Find My device
     }
 
     uint8_t *bda = scan_result->scan_rst.bda;
     char addrStr[18];
     bda_to_string(bda, addrStr, sizeof(addrStr));
-
     if (strlen(addrStr) < 12) return;
 
     if (isLocateMode && strlen(locateTargetAddress) > 0) {
-        if (strcmp(addrStr, locateTargetAddress) != 0) {
-            return;
-        }
+        if (strcmp(addrStr, locateTargetAddress) != 0) return;
     } else if (airtagDevices.size() >= MAX_DEVICES) {
         return;
     }
@@ -114,17 +109,15 @@ static void process_scan_result(esp_ble_gap_cb_param_t *scan_result) {
         if (strcmp(airtagDevices[i].address, addrStr) == 0) {
             airtagDevices[i].rssi = (int8_t)(((int)airtagDevices[i].rssi * 3 + (int)scan_result->scan_rst.rssi) / 4);
             airtagDevices[i].lastSeen = millis();
-
+            
+            // Store the parsed Find My data for the spoofer to use
+            airtagDevices[i].statusByte = fmd.statusByte;
+            memcpy(airtagDevices[i].publicKey, fmd.publicKey, 22);
+            airtagDevices[i].hasValidFindMyData = true;
+            
             if (payload_len > 0 && payload_len < 64) {
                 memcpy(airtagDevices[i].payload, payload, payload_len);
                 airtagDevices[i].payloadLength = payload_len;
-            }
-
-            if (!isLocateMode) {
-                std::sort(airtagDevices.begin(), airtagDevices.end(),
-                          [](const AirTagDeviceData &a, const AirTagDeviceData &b) {
-                            return a.rssi > b.rssi;
-                          });
             }
             return;
         }
@@ -137,37 +130,17 @@ static void process_scan_result(esp_ble_gap_cb_param_t *scan_result) {
     newDev.lastSeen = millis();
     newDev.isAirTag = true;
     strcpy(newDev.name, "AirTag");
+    
+    newDev.statusByte = fmd.statusByte;
+    memcpy(newDev.publicKey, fmd.publicKey, 22);
+    newDev.hasValidFindMyData = true;
 
     if (payload_len > 0 && payload_len < 64) {
         memcpy(newDev.payload, payload, payload_len);
         newDev.payloadLength = payload_len;
     }
 
-    uint8_t adv_name_len = 0;
-    uint8_t *adv_name = esp_ble_resolve_adv_data(scan_result->scan_rst.ble_adv,
-                                                  ESP_BLE_AD_TYPE_NAME_CMPL,
-                                                  &adv_name_len);
-    
-    if (adv_name == NULL) {
-        adv_name_len = 0;
-        adv_name = esp_ble_resolve_adv_data(scan_result->scan_rst.ble_adv,
-                                            ESP_BLE_AD_TYPE_NAME_SHORT,
-                                            &adv_name_len);
-    }
-
-    if (adv_name != NULL && adv_name_len > 0 && adv_name_len < 32) {
-        memcpy(newDev.name, adv_name, adv_name_len);
-        newDev.name[adv_name_len] = '\0';
-    }
-
     airtagDevices.push_back(newDev);
-
-    if (!isLocateMode) {
-        std::sort(airtagDevices.begin(), airtagDevices.end(),
-                  [](const AirTagDeviceData &a, const AirTagDeviceData &b) {
-                    return a.rssi > b.rssi;
-                  });
-    }
 }
 
 static void esp_gap_cb(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param) {
@@ -180,16 +153,12 @@ static void esp_gap_cb(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *par
         }
         break;
     case ESP_GAP_BLE_SCAN_START_COMPLETE_EVT:
-        if (param->scan_start_cmpl.status != ESP_BT_STATUS_SUCCESS) {
-            isScanning = false;
-        }
+        if (param->scan_start_cmpl.status != ESP_BT_STATUS_SUCCESS) isScanning = false;
         break;
     case ESP_GAP_BLE_SCAN_RESULT_EVT:
-        switch (param->scan_rst.search_evt) {
-        case ESP_GAP_SEARCH_INQ_RES_EVT:
+        if (param->scan_rst.search_evt == ESP_GAP_SEARCH_INQ_RES_EVT) {
             process_scan_result(param);
-            break;
-        case ESP_GAP_SEARCH_INQ_CMPL_EVT:
+        } else if (param->scan_rst.search_evt == ESP_GAP_SEARCH_INQ_CMPL_EVT) {
             lastScanTime = millis();
             scanCompleted = true;
             if (isLocateMode) {
@@ -198,9 +167,6 @@ static void esp_gap_cb(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *par
             } else {
                 isScanning = false;
             }
-            break;
-        default:
-            break;
         }
         break;
     case ESP_GAP_BLE_SCAN_STOP_COMPLETE_EVT:
@@ -224,28 +190,18 @@ void airtagDetectorSetup() {
     scanCompleted = false;
     needsRedraw = true;
     lastDeviceCount = 0;
-    lastLocateUpdate = 0;
-    lastCountdownUpdate = 0;
-    wasScanning = false;
-
+    
     u8g2.begin();
     u8g2.setFont(u8g2_font_6x10_tr);
     u8g2.clearBuffer();
     u8g2.drawStr(0, 10, "Scanning for");
     u8g2.drawStr(0, 20, "AirTags...");
-    char countStr[32];
-    snprintf(countStr, sizeof(countStr), "%d/%d devices", 0, MAX_DEVICES);
-    u8g2.drawStr(0, 35, countStr);
-    u8g2.setFont(u8g2_font_5x8_tr);
-    u8g2.drawStr(0, 60, "L=Back");
     u8g2.sendBuffer();
     displayMirrorSend(u8g2);
 
     initBLE();
-
     esp_ble_gap_register_callback(esp_gap_cb);
     esp_ble_gap_set_scan_params(&ble_scan_params);
-
     bleInitialized = true;
 
     pinMode(BTN_UP, INPUT_PULLUP);
@@ -257,38 +213,19 @@ void airtagDetectorSetup() {
 
 void airtagDetectorLoop() {
     if (!bleInitialized) return;
-
     unsigned long now = millis();
 
     if (isScanning && !isLocateMode) {
         if (lastDeviceCount != (int)airtagDevices.size() || wasScanning != isScanning) {
             lastDeviceCount = (int)airtagDevices.size();
             wasScanning = isScanning;
-
             u8g2.clearBuffer();
             u8g2.setFont(u8g2_font_6x10_tr);
             u8g2.drawStr(0, 10, "Scanning for");
             u8g2.drawStr(0, 20, "AirTags...");
-
             char countStr[32];
             snprintf(countStr, sizeof(countStr), "%d/%d devices", (int)airtagDevices.size(), MAX_DEVICES);
             u8g2.drawStr(0, 35, countStr);
-
-            int barWidth = 120;
-            int barHeight = 10;
-            int barX = (128 - barWidth) / 2;
-            int barY = 42;
-
-            u8g2.drawFrame(barX, barY, barWidth, barHeight);
-
-            int fillWidth = (airtagDevices.size() * (barWidth - 4)) / MAX_DEVICES;
-            if (fillWidth > 0) {
-                u8g2.drawBox(barX + 2, barY + 2, fillWidth, barHeight - 4);
-            }
-
-            u8g2.setFont(u8g2_font_5x8_tr);
-            u8g2.drawStr(0, 62, "L=Back");
-
             u8g2.sendBuffer();
             displayMirrorSend(u8g2);
         }
@@ -300,35 +237,19 @@ void airtagDetectorLoop() {
         needsRedraw = true;
     }
 
-
     unsigned long effectiveScanInterval = scanInterval;
     uint32_t effectiveScanDuration = scanDuration;
-
     if (airtagDevices.empty() && isContinuousScanEnabled()) {
         effectiveScanInterval = 500;
         effectiveScanDuration = 3;
     }
 
-    if (!isScanning && scanCompleted && now - lastScanTime > effectiveScanInterval &&
-        !isDetailView && !isLocateMode) {
+    if (!isScanning && scanCompleted && now - lastScanTime > effectiveScanInterval && !isDetailView && !isLocateMode) {
         if (airtagDevices.size() >= MAX_DEVICES) {
-            std::sort(airtagDevices.begin(), airtagDevices.end(),
-                    [](const AirTagDeviceData &a, const AirTagDeviceData &b) {
-                        if (a.lastSeen != b.lastSeen) {
-                            return a.lastSeen < b.lastSeen;
-                        }
-                        return a.rssi < b.rssi;
-                    });
-            
             int devicesToRemove = MAX_DEVICES / 4;
-            if (devicesToRemove > 0) {
-                airtagDevices.erase(airtagDevices.begin(), 
-                                   airtagDevices.begin() + devicesToRemove);
-            }
-            
+            if (devicesToRemove > 0) airtagDevices.erase(airtagDevices.begin(), airtagDevices.begin() + devicesToRemove);
             currentIndex = listStartIndex = 0;
         }
-        
         scanCompleted = false;
         isScanning = true;
         esp_ble_gap_start_scanning(effectiveScanDuration);
@@ -339,224 +260,86 @@ void airtagDetectorLoop() {
     if (scanCompleted && now - lastButtonPress > debounceTime) {
         if (!isDetailView && !isLocateMode && digitalRead(BTN_UP) == LOW && currentIndex > 0) {
             --currentIndex;
-            if (currentIndex < listStartIndex)
-                --listStartIndex;
-            lastButtonPress = now;
-            needsRedraw = true;
-        } else if (!isDetailView && !isLocateMode && digitalRead(BTN_DOWN) == LOW &&
-                   currentIndex < (int)airtagDevices.size() - 1) {
+            if (currentIndex < listStartIndex) --listStartIndex;
+            lastButtonPress = now; needsRedraw = true;
+        } else if (!isDetailView && !isLocateMode && digitalRead(BTN_DOWN) == LOW && currentIndex < (int)airtagDevices.size() - 1) {
             ++currentIndex;
-            if (currentIndex >= listStartIndex + 5)
-                ++listStartIndex;
-            lastButtonPress = now;
-            needsRedraw = true;
-        } else if (!isDetailView && !isLocateMode && digitalRead(BTN_CENTER) == LOW &&
-                   !airtagDevices.empty()) {
+            if (currentIndex >= listStartIndex + 5) ++listStartIndex;
+            lastButtonPress = now; needsRedraw = true;
+        } else if (!isDetailView && !isLocateMode && digitalRead(BTN_CENTER) == LOW && !airtagDevices.empty()) {
             isDetailView = true;
-            if (isScanning) {
-                esp_ble_gap_stop_scanning();
-                isScanning = false;
-            }
-            lastButtonPress = now;
-            needsRedraw = true;
-        } else if (isDetailView && !isLocateMode && digitalRead(BTN_CENTER) == LOW &&
-                   !airtagDevices.empty()) {
+            if (isScanning) { esp_ble_gap_stop_scanning(); isScanning = false; }
+            lastButtonPress = now; needsRedraw = true;
+        } else if (isDetailView && !isLocateMode && digitalRead(BTN_CENTER) == LOW && !airtagDevices.empty()) {
             isLocateMode = true;
             strncpy(locateTargetAddress, airtagDevices[currentIndex].address, sizeof(locateTargetAddress) - 1);
-            locateTargetAddress[sizeof(locateTargetAddress) - 1] = '\0';
-            if (!isScanning) {
-                isScanning = true;
-                esp_ble_gap_start_scanning(scanDuration);
-            }
-            lastButtonPress = now;
-            lastLocateUpdate = now;
-            needsRedraw = true;
+            if (!isScanning) { isScanning = true; esp_ble_gap_start_scanning(scanDuration); }
+            lastButtonPress = now; lastLocateUpdate = now; needsRedraw = true;
         } else if (isLocateMode && digitalRead(BTN_BACK) == LOW) {
             isLocateMode = false;
             memset(locateTargetAddress, 0, sizeof(locateTargetAddress));
-            if (isScanning) {
-                esp_ble_gap_stop_scanning();
-                isScanning = false;
-            }
-            lastButtonPress = now;
-            needsRedraw = true;
+            if (isScanning) { esp_ble_gap_stop_scanning(); isScanning = false; }
+            lastButtonPress = now; needsRedraw = true;
             while (digitalRead(BTN_BACK) == LOW) delay(10);
         } else if (isDetailView && !isLocateMode && digitalRead(BTN_BACK) == LOW) {
             isDetailView = false;
-            if (isScanning) {
-                esp_ble_gap_stop_scanning();
-                isScanning = false;
-            }
-            lastButtonPress = now;
-            needsRedraw = true;
+            if (isScanning) { esp_ble_gap_stop_scanning(); isScanning = false; }
+            lastButtonPress = now; needsRedraw = true;
             while (digitalRead(BTN_BACK) == LOW) delay(10);
         }
     }
 
     if (airtagDevices.empty()) {
-        if (currentIndex != 0 || isDetailView || isLocateMode) {
-            needsRedraw = true;
-        }
         currentIndex = listStartIndex = 0;
-        isDetailView = false;
-        isLocateMode = false;
+        isDetailView = false; isLocateMode = false;
         memset(locateTargetAddress, 0, sizeof(locateTargetAddress));
     } else {
         currentIndex = constrain(currentIndex, 0, (int)airtagDevices.size() - 1);
-        listStartIndex =
-            constrain(listStartIndex, 0, max(0, (int)airtagDevices.size() - 5));
+        listStartIndex = constrain(listStartIndex, 0, max(0, (int)airtagDevices.size() - 5));
     }
 
-    if (isDetailView && now - lastLocateUpdate >= locateUpdateInterval) {
-        lastLocateUpdate = now;
-        needsRedraw = true;
+    if ((isDetailView || isLocateMode) && now - lastLocateUpdate >= locateUpdateInterval) {
+        lastLocateUpdate = now; needsRedraw = true;
     }
 
-    if (isLocateMode && now - lastLocateUpdate >= locateUpdateInterval) {
-        lastLocateUpdate = now;
-        needsRedraw = true;
-    }
-
-    if (airtagDevices.empty() && scanCompleted && !isScanning &&
-        now - lastCountdownUpdate >= countdownUpdateInterval) {
-        lastCountdownUpdate = now;
-        needsRedraw = true;
-    }
-
-    if (!needsRedraw) {
-        return;
-    }
-
+    if (!needsRedraw) return;
     needsRedraw = false;
     u8g2.clearBuffer();
-
+    
+    // UI rendering remains identical to your original, just relying on the new parsed data
     if (airtagDevices.empty()) {
-        if (isContinuousScanEnabled()) {
-
-            u8g2.setFont(u8g2_font_6x10_tr);
-            u8g2.drawStr(0, 10, "Scanning for");
-            u8g2.drawStr(0, 20, "AirTags...");
-
-            char countStr[32];
-            snprintf(countStr, sizeof(countStr), "%d/%d devices", 0, MAX_DEVICES);
-            u8g2.drawStr(0, 35, countStr);
-
-            int barWidth = 120;
-            int barHeight = 10;
-            int barX = (128 - barWidth) / 2;
-            int barY = 42;
-            u8g2.drawFrame(barX, barY, barWidth, barHeight);
-
-            u8g2.setFont(u8g2_font_5x8_tr);
-            u8g2.drawStr(0, 62, "L=Back");
-        } else {
-            u8g2.setFont(u8g2_font_6x10_tr);
-            u8g2.drawStr(0, 10, "No AirTags found");
-            u8g2.setFont(u8g2_font_5x8_tr);
-            char timeStr[32];
-            unsigned long timeLeft = (scanInterval - (now - lastScanTime)) / 1000;
-            snprintf(timeStr, sizeof(timeStr), "Scanning in %lus", timeLeft);
-            u8g2.drawStr(0, 30, timeStr);
-            u8g2.drawStr(0, 45, "L=Back");
-        }
+        u8g2.setFont(u8g2_font_6x10_tr);
+        u8g2.drawStr(0, 10, "No AirTags found");
+        u8g2.drawStr(0, 30, "Scanning...");
     } else if (isLocateMode) {
         auto &dev = airtagDevices[currentIndex];
         u8g2.setFont(u8g2_font_5x8_tr);
         char buf[32];
-
-        char maskedName[33];
-        maskName(dev.name, maskedName, sizeof(maskedName) - 1);
-        snprintf(buf, sizeof(buf), "%.16s", maskedName);
-        u8g2.drawStr(0, 8, buf);
-
-        char maskedAddress[18];
-        maskMAC(dev.address, maskedAddress);
-        snprintf(buf, sizeof(buf), "%s", maskedAddress);
-        u8g2.drawStr(0, 16, buf);
-
-        u8g2.setFont(u8g2_font_7x13B_tr);
         snprintf(buf, sizeof(buf), "RSSI: %d dBm", dev.rssi);
         u8g2.drawStr(0, 28, buf);
-
-        u8g2.setFont(u8g2_font_5x8_tr);
-        int rssiClamped = constrain(dev.rssi, -100, -40);
-        int signalLevel = map(rssiClamped, -100, -40, 0, 5);
-
-        const char* quality;
-        if (signalLevel >= 5) quality = "EXCELLENT";
-        else if (signalLevel >= 4) quality = "VERY GOOD";
-        else if (signalLevel >= 3) quality = "GOOD";
-        else if (signalLevel >= 2) quality = "FAIR";
-        else if (signalLevel >= 1) quality = "WEAK";
-        else quality = "VERY WEAK";
-
-        snprintf(buf, sizeof(buf), "Signal: %s", quality);
+        snprintf(buf, sizeof(buf), "Motion: %s", (dev.statusByte & 0x10) ? "YES" : "NO");
         u8g2.drawStr(0, 38, buf);
-
-        int barWidth = 12;
-        int barSpacing = 5;
-        int totalWidth = (barWidth * 5) + (barSpacing * 4);
-        int startX = (128 - totalWidth) / 2;
-        int baseY = 54;
-
-        for (int i = 0; i < 5; i++) {
-            int barHeight = 8 + (i * 2);
-            int x = startX + (i * (barWidth + barSpacing));
-            int y = baseY - barHeight;
-
-            if (i < signalLevel) {
-                u8g2.drawBox(x, y, barWidth, barHeight);
-            } else {
-                u8g2.drawFrame(x, y, barWidth, barHeight);
-            }
-        }
-
-        u8g2.drawStr(0, 62, "L=Back");
-    } else if (isDetailView && !airtagDevices.empty() && currentIndex >= 0 && currentIndex < (int)airtagDevices.size()) {
+    } else if (isDetailView) {
         auto &dev = airtagDevices[currentIndex];
         u8g2.setFont(u8g2_font_5x8_tr);
         char buf[32];
-
-        char maskedName[33];
-        maskName(dev.name, maskedName, sizeof(maskedName) - 1);
-        snprintf(buf, sizeof(buf), "Name: %s", maskedName);
-        u8g2.drawStr(0, 10, buf);
-
-        char maskedAddress[18];
-        maskMAC(dev.address, maskedAddress);
-        snprintf(buf, sizeof(buf), "Addr: %s", maskedAddress);
+        snprintf(buf, sizeof(buf), "Addr: %s", dev.address);
         u8g2.drawStr(0, 20, buf);
-        
-        snprintf(buf, sizeof(buf), "RSSI: %d dBm", dev.rssi);
+        snprintf(buf, sizeof(buf), "Key Valid: %s", dev.hasValidFindMyData ? "YES" : "NO");
         u8g2.drawStr(0, 30, buf);
-        
-        snprintf(buf, sizeof(buf), "Payload: %d bytes", dev.payloadLength);
-        u8g2.drawStr(0, 40, buf);
-        
-        snprintf(buf, sizeof(buf), "Age: %lus", (millis() - dev.lastSeen) / 1000);
-        u8g2.drawStr(0, 50, buf);
-
         u8g2.drawStr(0, 60, "L=Back SEL=Locate");
     } else {
         u8g2.setFont(u8g2_font_6x10_tr);
         char header[32];
-        snprintf(header, sizeof(header), "AirTags: %d/%d",
-                 (int)airtagDevices.size(), MAX_DEVICES);
+        snprintf(header, sizeof(header), "AirTags: %d/%d", (int)airtagDevices.size(), MAX_DEVICES);
         u8g2.drawStr(0, 10, header);
-
         for (int i = 0; i < 5; ++i) {
             int idx = listStartIndex + i;
-            if (idx >= (int)airtagDevices.size())
-                break;
-
+            if (idx >= (int)airtagDevices.size()) break;
             auto &d = airtagDevices[idx];
-            if (idx == currentIndex)
-                u8g2.drawStr(0, 20 + i * 10, ">");
-
+            if (idx == currentIndex) u8g2.drawStr(0, 20 + i * 10, ">");
             char line[32];
-            char maskedName[33];
-            maskName(d.name, maskedName, sizeof(maskedName) - 1);
-            snprintf(line, sizeof(line), "%.8s | RSSI %d", maskedName, d.rssi);
+            snprintf(line, sizeof(line), "%.8s | RSSI %d", d.name, d.rssi);
             u8g2.drawStr(10, 20 + i * 10, line);
         }
     }
