@@ -3,6 +3,8 @@
 
 A compact ESP32 wireless toolkit for security research and Wi-Fi, Bluetooth and RFID related work.  
 
+> README needs an update: The current readme isn't up to date. It needs to be updated.
+
 Forked from [nyanBOX](https://github.com/jbohack/nyanBOX) by Nyan Devices, itself originally forked from [nRFbox](https://github.com/cifertech/nrfbox) by CiferTech.
 
 **Repository:** [github.com/richardGladson/doomBOX](https://github.com/richardGladson/doomBOX)
