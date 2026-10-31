@@ -1,15 +1,16 @@
 # doomBOX
 <img width="1976" height="796" alt="doomBOX banner" src="doomBOX banner.png" />
 
-A compact ESP32 wireless toolkit for security research and Wi-Fi, Bluetooth and RFID related work.  
+A compact ESP32 wireless toolkit for security research and Wi-Fi, Bluetooth and RFID related work.
 
-> README needs an update: The current readme isn't up to date. It needs to be updated.
+**Version:** v4.27.11
 
 Forked from [nyanBOX](https://github.com/jbohack/nyanBOX) by Nyan Devices, itself originally forked from [nRFbox](https://github.com/cifertech/nrfbox) by CiferTech.
 
 **Repository:** [github.com/richardGladson/doomBOX](https://github.com/richardGladson/doomBOX)
 
 ---
+
 ## Acknowledgements & Licensing
 
 doomBOX is a derivative project built upon [nyanBOX](https://github.com/jbohack/nyanBOX) by **jbohack**. The original project provided the foundation for doomBOX, and its original authorship and contributions are acknowledged and respected.
@@ -44,7 +45,7 @@ Full multi-radio spectrum work lives on Reaper. This firmware has no onboard nRF
 |-----------|--------|
 | MCU | ESP32 (PlatformIO board: `esp32dev`) |
 | Display | 0.96″ 128×64 OLED (SSD1306, I²C / U8g2) |
-| Buttons | Up, Down, Center (exit), Left (back), Right |
+| Buttons | Up, Down, Center (exit / select), Left (back), Right |
 | Status LED | NeoPixel / RGB (GPIO 14) |
 | RFID (optional) | MFRC522 on SPI |
 
@@ -76,13 +77,14 @@ Full multi-radio spectrum work lives on Reaper. This firmware has no onboard nRF
 - Evil Portal (captive portal)
 - Pineapple detector
 - Pwnagotchi detector & spam
+- Camera deauther
 
 ### 🔵 Bluetooth / BLE
 - BLE scanner
 - BLE advertising inspector
 - doomBOX / nyanBOX detector
 - Flipper Zero, Axon, Meshtastic, MeshCore detectors
-- Bluetooth skimmer detector
+- Bluetooth skimmer (card skimmer) detector
 - AirTag detector & spoofer
 - Samsung SmartTag, Tile, Ray-Ban Meta detectors
 - BLE spammer, Swift Pair spam, Sour Apple, Sour Droid, BLE spoofer
@@ -97,7 +99,18 @@ Full multi-radio spectrum work lives on Reaper. This firmware has no onboard nRF
 > Use **Reaper → BT Survey / WiFi Survey** when a Reaper node is paired for spectrum work.
 
 ### 🏷️ RFID
-- MFRC522 tools (main menu, right column)
+- Nested menu: Scanner / Dumper / Cloner / Saved Cards / Tools
+- UID + data read, magic-card / rewritable detection
+- Full dump with progress bar, save to SPIFFS
+- Clone from saved card (UID-only or full dump restore)
+- Format / factory-reset magic cards
+- Multi-card batch clone mode
+- Access-condition decoder
+- Scan log (ring buffer)
+- Simple key brute-force (common keys)
+- Card “emulator” UI (educational note — RC522 is reader-only)
+- Live field-strength indicator while scanning
+- Confirmation dialogs for destructive operations
 
 ### 🖥️ Interface
 - Dual-column main menu: **WiFi / BLE / Other** (left) · **RFID / Reaper** (right)
@@ -105,7 +118,11 @@ Full multi-radio spectrum work lives on Reaper. This firmware has no onboard nRF
 - Level / XP system (Right again on the right column)
 - NeoPixel status
 - Display mirroring
+- Airplane mode (hides Wi‑Fi & BLE categories)
+- Troll mode (glitchy visual overlay)
+- Options menu (brightness, password, airplane, troll, dangerous-actions toggle)
 - Snake easter egg (Konami code on About: ↑↑↓↓←→←→←→)
+- Legal disclaimer flow on first boot / when required
 
 ---
 
@@ -127,7 +144,7 @@ Left column              Right column
 3. Actions (Up/Down, Right to run): **BT Survey** · **WiFi Survey** · **Stop** · **Refresh Status** · **Disconnect**.
 4. Center exits to the main menu.
 
-Protocol: versioned binary packets (magic `0xDB`), heartbeats, mode/scan/stop/status. See Reaper’s `protocol.h` and this repo’s `reaper_protocol` sources.
+Protocol: versioned binary packets (magic `0xDB`), heartbeats, mode/scan/stop/status. See Reaper’s `protocol.h` and this repo’s consolidated `reaper.cpp` sources.
 
 ---
 
@@ -142,7 +159,8 @@ pio run -t upload
 pio device monitor
 ```
 
-**Environment:** `doomBOX` · board `esp32dev` · partition `huge_app.csv`
+**Environment:** `doomBOX` · board `esp32dev` · partition `huge_app.csv`  
+**Monitor speed:** 115200
 
 **Libraries** (from `platformio.ini`):
 - `olikraus/U8g2`
@@ -157,11 +175,11 @@ pio device monitor
 ```
 doomBOX PlatformIO/
   platformio.ini
-  include/          # headers (apps, pindefs, icons, reaper_*)
+  include/          # headers (apps, pindefs, icons, protocol helpers)
   src/              # main.cpp + one module per tool
 ```
 
-Notable modules: `wifiscan`, `deauth`, `handshake_capture`, `evil_portal`, `blescan`, `ble_*`, detectors, `radio_manager`, `rfid`, `reaper_manager` / `reaper_ui` / `reaper_protocol`.
+Notable modules: `wifiscan`, `deauth`, `handshake_capture`, `evil_portal`, `camera-deauther`, `blescan`, `ble_*`, detectors, `radio_manager`, `rfid`, `reaper` (protocol + manager + UI), `level_system`, `snake`, `setting`.
 
 ---
 
@@ -182,13 +200,13 @@ Flash Reaper, power it near doomBOX, open **Reaper** on the main menu, and wait 
 
 ## Differences from stock nyanBOX
 
-**Not carried over (examples):** camera detector/deauther, passive 802.11 CSV monitor, FindMy/HID beepers, KARR, iBeacon tools, LE gear detector, jam detector, battery pack / enclosure, triple-nRF24 on the same board.
-
-**doomBOX-specific:**
-- Focus on onboard Wi‑Fi/BLE + OLED (no onboard nRF24)
-- RFID column
-- **ESP‑NOW Reaper integration** for remote multi-radio survey
-- Snake easter egg, level system, legal disclaimer flow
+**doomBOX-specific additions and focus:**
+- Full nyanBOX feature set retained and extended (including camera deauther and related tools)
+- Dedicated RFID column with rich MFRC522 tooling (dump / clone / batch / tools)
+- **ESP‑NOW Reaper integration** for remote multi-radio passive survey (no onboard nRF24)
+- Level / XP system, optional boot password, airplane mode, troll mode, brightness control
+- Snake easter egg, display mirroring, legal disclaimer flow
+- Consolidated Reaper protocol/manager/UI in a single module
 
 ---
 
@@ -196,10 +214,12 @@ Flash Reaper, power it near doomBOX, open **Reaper** on the main menu, and wait 
 
 doomBOX is for **education, security research, and authorized testing only**. Do not scan, deauth, spoof, or interfere with networks or devices you do not own or lack explicit permission to test. Follow local radio and computer-crime laws. You are solely responsible for how you use this software and hardware; authors and contributors accept no liability for misuse.
 
+See also [DISCLAIMER.md](DISCLAIMER.md).
+
 ---
 
 ## License
 
 GNU GPL-3.0 License — see [LICENSE](LICENSE).
 
-This project is a derivative of nyanBOX (MIT). Changing the license to GPL from the original MIT ensures that all derivative firmware is distrubuted and used properly. Original copyright notices in source headers must be retained.
+This project is a derivative of nyanBOX (MIT). Changing the license to GPL from the original MIT ensures that all derivative firmware is distributed and used properly. Original copyright notices in source headers must be retained.
